@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     groq_api_key: str = ""
+    groq_model: str = "llama-3.1-8b-instant"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     sentry_dsn: str = ""
