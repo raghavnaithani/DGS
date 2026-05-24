@@ -1,0 +1,2 @@
+class BackgroundJob:
+    pass

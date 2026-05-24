@@ -1,0 +1,18 @@
+{
+  "name": "dgs-platform",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend",
+    "desktop",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"cd backend && poetry run uvicorn app.main:app --reload --port 8000\" \"cd frontend && npm run dev\"",
+    "build": "cd frontend && npm run build",
+    "lint": "cd frontend && npm run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
