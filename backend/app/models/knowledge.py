@@ -1,2 +1,2 @@
-class KnowledgeChunk:
-    pass
+from .schemas import KnowledgeChunk
+

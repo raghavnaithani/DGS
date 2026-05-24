@@ -1,2 +1,2 @@
-class UserProfile:
-    pass
+from .schemas import UserIntent
+

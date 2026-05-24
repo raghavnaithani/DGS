@@ -14,3 +14,6 @@ __pycache__/
 .env
 .env.local
 .DS_Store
+completion status/
+COMPLETION_LOG.txt
+backend/app/database/dgs_phase1.sqlite3
