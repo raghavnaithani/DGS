@@ -32,6 +32,25 @@ SCHEMA_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_user_intents_domain ON user_intents(domain)",
     "CREATE INDEX IF NOT EXISTS idx_user_intents_created_at ON user_intents(created_at)",
     """
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        job_type TEXT NOT NULL,
+        request_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+        current_step TEXT NOT NULL DEFAULT 'queued',
+        total_sources INTEGER NOT NULL DEFAULT 0 CHECK (total_sources >= 0),
+        scraped_sources INTEGER NOT NULL DEFAULT 0 CHECK (scraped_sources >= 0),
+        stored_chunks INTEGER NOT NULL DEFAULT 0 CHECK (stored_chunks >= 0),
+        result_json TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)",
+    """
     CREATE TABLE IF NOT EXISTS nodes (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
