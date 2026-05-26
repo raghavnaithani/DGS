@@ -1,6 +1,0 @@
-$619e150f-5f22-4e1d-9abc-806e0e435c72²âid ÿÿÿÿÿÿÿÿÿ*string08"content ÿÿÿÿÿÿÿÿÿ*string08%
-source_url ÿÿÿÿÿÿÿÿÿ*string08'source_title ÿÿÿÿÿÿÿÿÿ*string08%chunk_index ÿÿÿÿÿÿÿÿÿ*int6408$	parent_id ÿÿÿÿÿÿÿÿÿ*string08)parent_content ÿÿÿÿÿÿÿÿÿ*string08(section_title ÿÿÿÿÿÿÿÿÿ*string08"	embedding ÿÿÿÿÿÿÿÿÿ*list08item	 *float08%
-created_at
- ÿÿÿÿÿÿÿÿÿ*string08"ttl_days ÿÿÿÿÿÿÿÿÿ*int6408.verification_status ÿÿÿÿÿÿÿÿÿ*string08+similarity_score ÿÿÿÿÿÿÿÿÿ*double08"!
-lance.auto_cleanup.interval20"'
-lance.auto_cleanup.older_than14days
