@@ -1,4 +1,8 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except Exception:
+    BaseSettings = object
+    SettingsConfigDict = dict
 
 
 class Settings(BaseSettings):
@@ -24,7 +28,10 @@ class Settings(BaseSettings):
     supabase_key: str = ""
     debug: bool = False
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    try:
+        model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    except Exception:
+        model_config = {}
 
 
 settings = Settings()

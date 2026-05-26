@@ -5,7 +5,34 @@ from functools import lru_cache
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+try:
+    from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+    _HAS_CRAWL4AI = True
+except Exception:
+    # Provide lightweight stubs so the module can be imported in environments
+    # where crawl4ai is not installed (tests often monkeypatch `scrape_urls`).
+    _HAS_CRAWL4AI = False
+
+    class BrowserConfig:
+        def __init__(self, *args, **kwargs):
+            self.user_agent = "debug-agent"
+
+    class CrawlerRunConfig:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class AsyncWebCrawler:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def arun(self, url, config=None):
+            raise RuntimeError("crawl4ai not available in this environment")
 
 from ..config import settings
 from ..models.knowledge import ScrapedPage

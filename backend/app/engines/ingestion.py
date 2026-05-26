@@ -149,6 +149,13 @@ class IngestionService:
                 },
             )
         except Exception as exc:
+            # Debug: surface full exception to test output to diagnose failures
+            try:
+                import traceback
+
+                traceback.print_exc()
+            except Exception:
+                pass
             self.job_store.update_job(job_id, status="failed", progress=100, current_step="failed", error_message=str(exc))
 
     @staticmethod
