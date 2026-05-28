@@ -8,8 +8,14 @@ from typing import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
-from ddgs import DDGS
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except Exception:
+    BeautifulSoup = None  # type: ignore
+try:
+    from ddgs import DDGS  # type: ignore
+except Exception:
+    DDGS = None  # type: ignore
 
 from ..config import settings
 
@@ -121,6 +127,28 @@ def _score_candidate(candidate: SearchCandidate) -> float:
 
 
 def _parse_ddg_results(html: str) -> list[SearchCandidate]:
+    if BeautifulSoup is None:
+        candidates: list[SearchCandidate] = []
+        pattern = re.compile(
+            r'<a[^>]*class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
+            r'<div[^>]*class="result__snippet"[^>]*>(?P<snippet>.*?)</div>',
+            re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(html):
+            url = _normalize_ddg_url(unquote(match.group("href")))
+            title = re.sub(r"<[^>]+>", "", match.group("title")).strip()
+            snippet = re.sub(r"<[^>]+>", "", match.group("snippet")).strip()
+            if not url or not title:
+                continue
+            candidates.append(
+                SearchCandidate(
+                    title=title,
+                    url=url,
+                    snippet=snippet,
+                    domain=_domain_from_url(url),
+                )
+            )
+        return candidates
     soup = BeautifulSoup(html, "html.parser")
     candidates: list[SearchCandidate] = []
     for result in soup.select("div.result, article, div[data-testid='result']"):
@@ -146,6 +174,8 @@ async def _fetch_search_page(client: httpx.AsyncClient, query: str, offset: int)
 
 def _fetch_ddgs_results(query: str, limit: int) -> list[SearchCandidate]:
     results: list[SearchCandidate] = []
+    if DDGS is None:
+        return results
     try:
         with DDGS(timeout=20) as ddgs:
             fallback_results = ddgs.text(query, backend="lite", max_results=limit)

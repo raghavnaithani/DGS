@@ -105,6 +105,43 @@ SCHEMA_STATEMENTS = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_chunks_session_id ON chunks(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_chunks_source_url ON chunks(source_url)",
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+        id UNINDEXED,
+        content,
+        source_url UNINDEXED,
+        source_title,
+        tokenize='porter unicode61'
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(id, content, source_url, source_title)
+        VALUES (new.id, new.content, new.source_url, COALESCE(new.source_title, ''));
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+        DELETE FROM chunks_fts WHERE id = old.id;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+        DELETE FROM chunks_fts WHERE id = old.id;
+        INSERT INTO chunks_fts(id, content, source_url, source_title)
+        VALUES (new.id, new.content, new.source_url, COALESCE(new.source_title, ''));
+    END
+    """,
+    """
+    INSERT INTO chunks_fts(id, content, source_url, source_title)
+    SELECT c.id, c.content, c.source_url, COALESCE(c.source_title, '')
+    FROM chunks c
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM chunks_fts f
+        WHERE f.id = c.id
+    )
+    """,
 )
 
 

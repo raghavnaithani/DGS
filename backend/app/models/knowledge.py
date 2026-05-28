@@ -50,5 +50,33 @@ class ChunkDocument(KnowledgeBaseModel):
 		return self
 
 
+class RetrievalRequest(KnowledgeBaseModel):
+	query: str = Field(min_length=1, max_length=500)
+	top_k: int = Field(default=10, ge=1, le=50)
+
+
+class RetrievedEvidenceChunk(KnowledgeBaseModel):
+	id: str = Field(min_length=1)
+	content: str = Field(min_length=1)
+	source_url: str = Field(min_length=1)
+	source_title: str | None = None
+	chunk_index: int = Field(ge=0)
+	parent_id: str | None = None
+	parent_content: str | None = None
+	section_title: str | None = None
+	citation: str = Field(min_length=1)
+	rrf_score: float = Field(ge=0.0)
+	dense_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
+	bm25_score: float | None = None
+	context_type: str = "evidence"
+
+
+class RetrievalResponse(KnowledgeBaseModel):
+	query: str
+	top_k: int = Field(ge=1, le=50)
+	evidence: list[RetrievedEvidenceChunk] = Field(default_factory=list)
+	expanded_context: list[RetrievedEvidenceChunk] = Field(default_factory=list)
+
+
 from .schemas import KnowledgeChunk
 

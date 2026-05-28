@@ -16,6 +16,17 @@ class Settings(BaseSettings):
     scrape_max_workers: int = 6
     embedding_max_workers: int = 2
     search_max_results: int = 30
+    retrieval_dense_limit: int = 20
+    retrieval_bm25_limit: int = 20
+    retrieval_similarity_threshold: float = 0.7
+    retrieval_rrf_k: int = 60
+    retrieval_enable_reranking: bool = True
+    retrieval_rrf_dense_weight: float = 1.0
+    retrieval_rrf_bm25_weight: float = 1.0
+    retrieval_rrf_top_rank_bonus: float = 0.05
+    retrieval_bm25_skip_threshold: float = 0.9
+    retrieval_bm25_skip_gap: float = 0.2
+    retrieval_expand_parents: bool = True
     search_page_delay_seconds: float = 0.25
     # Scraping safety knobs
     scrape_timeout_seconds: float = 30.0

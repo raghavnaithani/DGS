@@ -19,3 +19,4 @@ COMPLETION_LOG.txt
 backend/app/database/dgs_phase1.sqlite3
 backend/.dgs_lancedb/
 \.dgs_lancedb/
+backend/.retrieval_eval_logs/

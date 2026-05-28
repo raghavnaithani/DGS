@@ -9,6 +9,7 @@ from .database.jobs_store import SQLiteJobStore
 from .database.connection import initialize_database
 from .database.vector_store import get_vector_store
 from .engines.ingestion import IngestionService
+from .engines.retriever import HybridRetriever
 from .models import Alternative, DecisionNode, KnowledgeChunk, Risk, UserIntent
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     app.state.job_store = job_store
     app.state.vector_store = vector_store
     app.state.ingestion_service = IngestionService(job_store=job_store, vector_store=vector_store)
+    app.state.retriever = HybridRetriever(vector_store=vector_store, db_path=job_store.db_path)
     app.state.background_tasks = set()
     logger.info("Models loaded and database ready")
     yield

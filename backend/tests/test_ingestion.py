@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 from fastapi.testclient import TestClient
 
 from app.api import knowledge as knowledge_api
@@ -19,6 +18,14 @@ from app.models.knowledge import ChunkDocument, ScrapedPage
 
 
 client = TestClient(app)
+
+
+class FakeArray:
+    def __init__(self, data):
+        self._data = data
+
+    def tolist(self):
+        return self._data
 
 
 def _build_ddg_html(count: int = 16) -> str:
@@ -147,7 +154,7 @@ def test_embedder_returns_vectors_of_expected_dimensions(monkeypatch):
     class DummyModel:
         def encode(self, texts, **kwargs):
             assert kwargs["batch_size"] == embedder_module.settings.embedding_batch_size
-            return np.array([[float(index + column) for column in range(3)] for index, _ in enumerate(texts)])
+            return FakeArray([[float(index + column) for column in range(3)] for index, _ in enumerate(texts)])
 
         def get_sentence_embedding_dimension(self):
             return 3
@@ -391,7 +398,7 @@ def test_duplicate_content_does_not_crash_chunking_embedding_and_storage(tmp_pat
 
     class DummyModel:
         def encode(self, texts, **kwargs):
-            return np.array([[0.1, 0.2, 0.3] for _ in texts])
+            return FakeArray([[0.1, 0.2, 0.3] for _ in texts])
 
         def get_sentence_embedding_dimension(self):
             return 3
