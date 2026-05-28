@@ -75,6 +75,39 @@ class SQLiteJobStore:
             connection.commit()
         return self.get_job(job_id)
 
+    def create_simulation_job(self, request: dict[str, object]) -> JobRecord:
+        """Create a simulation job record. Request is a plain dict representing the simulation request."""
+        job_id = str(uuid4())
+        payload_json = json.dumps(request, ensure_ascii=False)
+        now = self._now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO jobs (
+                    id, job_type, request_json, status, progress, current_step,
+                    total_sources, scraped_sources, stored_chunks, result_json,
+                    error_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    "simulation",
+                    payload_json,
+                    "queued",
+                    0,
+                    "queued",
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+        return self.get_job(job_id)
+
     def update_job(self, job_id: str, **fields: object) -> JobRecord:
         if not fields:
             return self.get_job(job_id)

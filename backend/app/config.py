@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
     debug: bool = False
+    # Simulation / reasoning settings
+    simulation_max_retries: int = 3
+    simulation_temperature: float = 0.7
+    simulation_max_tokens: int = 1024
+    simulation_retry_penalty: float = 0.1
 
     try:
         model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

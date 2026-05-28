@@ -30,7 +30,7 @@ class JobSubmission(JobBaseModel):
 
 class JobRecord(JobBaseModel):
     id: str
-    job_type: Literal["ingestion"]
+    job_type: Literal["ingestion", "simulation"]
     request: dict[str, object]
     status: Literal["queued", "running", "completed", "failed"]
     progress: int = Field(ge=0, le=100)
