@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.engines.reasoning import NodeGenerator, NodeGenerationError
 from app.models.schemas import DecisionNode
 
 
 def _valid_node_json(id: str = "n1") -> str:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     return f"{{\n  \"id\": \"{id}\",\n  \"title\": \"Test\",\n  \"summary\": \"A summary. [Source: speculative]\",\n  \"description\": \"A description. [Source: speculative]\",\n  \"time_step\": 0,\n  \"created_by_engine\": \"test\",\n  \"alternatives\": [],\n  \"risks\": [{{\"id\": \"r1\", \"description\": \"Minor risk. [Source: speculative]\", \"severity\": \"Low\", \"likelihood\": \"Low\"}}],\n  \"source_citations\": [],\n  \"confidence_score\": 0.5,\n  \"speculative\": true,\n  \"created_at\": \"{now}\"\n}}"
 
 
@@ -43,3 +43,33 @@ def test_generate_node_no_api_key(monkeypatch):
     monkeypatch.setattr(gen, "_chat_completion", lambda s, u: (_ for _ in ()).throw(Exception("no key")))
     with pytest.raises(NodeGenerationError):
         gen.generate_node(user_intent={"id": "i3", "original_prompt": "test3", "domain": "general", "horizon_months": 3, "risk_tolerance": 5, "constraints": [], "personal_context": "ctx", "clarified_entities": [], "ambiguities_remaining": []}, evidence_chunks=[], time_step=0, max_retries=0)
+
+
+def test_generate_node_marks_unsupported_claims_speculative(monkeypatch):
+    gen = NodeGenerator()
+    raw = """
+    {
+      "id": "node-grounding",
+      "title": "Test",
+      "summary": "The company will double revenue next quarter.",
+      "description": "The company will double revenue next quarter.",
+      "time_step": 0,
+      "created_by_engine": "test",
+      "alternatives": [],
+      "risks": [{"id": "r1", "description": "There is execution risk.", "severity": "High", "likelihood": "Medium"}],
+      "source_citations": [],
+      "confidence_score": 0.5,
+      "speculative": false,
+      "created_at": "2026-05-29T00:00:00+00:00"
+    }
+    """
+    monkeypatch.setattr(gen, "_chat_completion", lambda s, u: raw)
+
+    node, _ = gen.generate_node(
+        user_intent={"id": "i4", "original_prompt": "test4", "domain": "general", "horizon_months": 3, "risk_tolerance": 5, "constraints": [], "personal_context": "ctx", "clarified_entities": [], "ambiguities_remaining": []},
+        evidence_chunks=[],
+        time_step=0,
+    )
+
+    assert node["speculative"] is True
+    assert "[Source: speculative]" in node["summary"]

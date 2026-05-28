@@ -148,6 +148,34 @@ class LanceChunkStore:
         except Exception:
             return
 
+    @staticmethod
+    def _cosine_similarity(lhs: list[float], rhs: list[float]) -> float:
+        if not lhs or not rhs or len(lhs) != len(rhs):
+            return 0.0
+        dot = sum(a * b for a, b in zip(lhs, rhs))
+        lhs_norm = sqrt(sum(a * a for a in lhs))
+        rhs_norm = sqrt(sum(b * b for b in rhs))
+        if lhs_norm == 0.0 or rhs_norm == 0.0:
+            return 0.0
+        return dot / (lhs_norm * rhs_norm)
+
+    def _cached_similarity_search(self, query_embedding: list[float], limit: int) -> list[dict] | None:
+        if not self._row_cache:
+            return None
+
+        ranked: list[tuple[float, dict]] = []
+        for row in self._row_cache.values():
+            embedding = row.get("embedding") or []
+            similarity = self._cosine_similarity(query_embedding, embedding)
+            ranked.append((similarity, dict(row)))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        output: list[dict] = []
+        for similarity, row in ranked[:limit]:
+            row["_cosine_similarity"] = max(0.0, min(1.0, float(similarity)))
+            output.append(row)
+        return output
+
     def get_chunk_by_id(self, chunk_id: str) -> dict | None:
         if chunk_id in self._row_cache:
             return dict(self._row_cache[chunk_id])
@@ -188,6 +216,10 @@ class LanceChunkStore:
     def query_similar_chunks(self, query_embedding: list[float], limit: int = 20) -> list[dict]:
         if not query_embedding:
             return []
+
+        cached_results = self._cached_similarity_search(query_embedding, limit)
+        if cached_results is not None:
+            return cached_results
 
         table = self._open_or_create_table()
 

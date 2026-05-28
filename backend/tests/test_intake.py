@@ -5,6 +5,8 @@ import json
 from fastapi.testclient import TestClient
 
 from app.api import intake
+from app.database.connection import get_connection
+from app.database.jobs_store import SQLiteJobStore
 from app.main import app
 
 
@@ -36,7 +38,8 @@ def test_clarify_returns_valid_questions(monkeypatch):
     assert payload["questions"][2]["type"] == "number"
 
 
-def test_build_intent_returns_valid_user_intent(monkeypatch):
+def test_build_intent_returns_valid_user_intent(monkeypatch, tmp_path):
+    app.state.job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
     monkeypatch.setattr(intake, "_require_groq_key", lambda: "test-key")
     monkeypatch.setattr(
         intake,
@@ -65,6 +68,14 @@ def test_build_intent_returns_valid_user_intent(monkeypatch):
     assert payload["domain"] == "career planning"
     assert payload["horizon_months"] == 6
     assert payload["risk_tolerance"] == 7
+
+    connection = get_connection(app.state.job_store.db_path)
+    row = connection.execute("SELECT * FROM user_intents WHERE id = ?", (payload["id"],)).fetchone()
+    assert row is not None
+    assert row["original_prompt"] == "Should I change my career?"
+    assert row["domain"] == "career planning"
+    assert row["horizon_months"] == 6
+    assert row["risk_tolerance"] == 7
 
 
 def test_build_intent_rejects_missing_answers():

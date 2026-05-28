@@ -6,10 +6,11 @@ from typing import Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import settings
+from ..database.connection import get_connection
 from ..models import UserIntent
 
 router = APIRouter()
@@ -174,6 +175,46 @@ def _normalize_questions(items: list[dict[str, object]]) -> list[Question]:
     return normalized
 
 
+def _user_intent_db_path(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    job_store = getattr(request.app.state, "job_store", None)
+    return str(job_store.db_path) if job_store is not None else None
+
+
+def _persist_user_intent(intent: UserIntent, request: Request | None) -> UserIntent:
+    connection = get_connection(_user_intent_db_path(request))
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO user_intents (
+                id,
+                original_prompt,
+                domain,
+                horizon_months,
+                risk_tolerance,
+                constraints_json,
+                personal_context,
+                clarified_entities_json,
+                ambiguities_remaining_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                intent.id,
+                intent.original_prompt,
+                intent.domain,
+                intent.horizon_months,
+                intent.risk_tolerance,
+                json.dumps(intent.constraints, ensure_ascii=False),
+                intent.personal_context,
+                json.dumps(intent.clarified_entities, ensure_ascii=False),
+                json.dumps(intent.ambiguities_remaining, ensure_ascii=False),
+            ),
+        )
+        connection.commit()
+    return intent
+
+
 @router.post("/clarify", response_model=ClarifyResponse)
 def clarify(payload: ClarifyRequest) -> ClarifyResponse:
     api_key = _require_groq_key()
@@ -188,7 +229,7 @@ def clarify(payload: ClarifyRequest) -> ClarifyResponse:
 
 
 @router.post("/build-intent", response_model=UserIntent)
-def build_intent(payload: BuildIntentRequest) -> UserIntent:
+def build_intent(payload: BuildIntentRequest, request: Request) -> UserIntent:
     if not payload.answers:
         raise HTTPException(status_code=400, detail="answers are required")
 
@@ -217,7 +258,7 @@ def build_intent(payload: BuildIntentRequest) -> UserIntent:
         raise HTTPException(status_code=502, detail="Groq returned an invalid horizon_months value")
     if not 1 <= validated_intent.risk_tolerance <= 10:
         raise HTTPException(status_code=502, detail="Groq returned an invalid risk_tolerance value")
-    return validated_intent
+    return _persist_user_intent(validated_intent, request)
 
 
 @router.get("/mock-clarify", response_model=MockClarifyResponse)
@@ -227,7 +268,7 @@ def mock_clarify(prompt: str = "test") -> MockClarifyResponse:
 
 
 @router.post("/mock-build-intent", response_model=UserIntent)
-def mock_build_intent(payload: MockBuildIntentRequest) -> UserIntent:
+def mock_build_intent(payload: MockBuildIntentRequest, request: Request) -> UserIntent:
     intent = {
         "id": str(uuid4()),
         "original_prompt": payload.prompt,
@@ -239,4 +280,4 @@ def mock_build_intent(payload: MockBuildIntentRequest) -> UserIntent:
         "clarified_entities": ["goal", "timeline", "constraints"],
         "ambiguities_remaining": ["specific alternatives to compare"],
     }
-    return UserIntent.model_validate(intent)
+    return _persist_user_intent(UserIntent.model_validate(intent), request)

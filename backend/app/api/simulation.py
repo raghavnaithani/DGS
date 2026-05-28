@@ -1,73 +1,132 @@
 from __future__ import annotations
 
-from uuid import uuid4
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+import json
 
-from ..database.jobs_store import get_job_store
-from ..models.jobs import JobSubmission
-from ..engines.simulation import generate_initial_graph
-from ..models.schemas import UserIntent
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, HttpUrl
+
 from ..database.connection import get_connection
-from ..config import settings
+from ..database.jobs_store import get_job_store
+from ..engines.simulation import generate_initial_graph
+from ..models.jobs import JobSubmission
+from ..services.simulation_worker import SimulationJobWorker
 
 router = APIRouter()
 
 
-class StartSimRequest(BaseModel := __import__("pydantic").base.BaseModel):
-    model_config = __import__("pydantic").base.ConfigDict(extra="forbid", str_strip_whitespace=True)
+class StartSimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
     user_intent_id: str
     persona: str | None = None
+    webhook_url: HttpUrl | None = None
 
 
-def _fetch_user_intent(intent_id: str) -> dict:
-    # fetch from sqlite 'user_intents' table if exists, else raise
-    conn = get_connection()
-    row = conn.execute("SELECT json FROM user_intents WHERE id = ?", (intent_id,)).fetchone()
+class BranchSimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    session_id: str
+    parent_node_id: str
+    action_description: str
+    persona: str | None = None
+    webhook_url: HttpUrl | None = None
+
+
+def _fetch_user_intent(intent_id: str, db_path: str | None = None) -> dict:
+    conn = get_connection(db_path)
+    row = conn.execute(
+        "SELECT id, original_prompt, domain, horizon_months, risk_tolerance, constraints_json, personal_context, clarified_entities_json, ambiguities_remaining_json, created_at FROM user_intents WHERE id = ?",
+        (intent_id,),
+    ).fetchone()
     if not row:
         raise KeyError(intent_id)
-    return __import__("json").loads(row[0])
+    return {
+        "id": row["id"],
+        "original_prompt": row["original_prompt"],
+        "domain": row["domain"],
+        "horizon_months": int(row["horizon_months"]),
+        "risk_tolerance": int(row["risk_tolerance"]),
+        "constraints": json.loads(row["constraints_json"] or "[]"),
+        "personal_context": row["personal_context"],
+        "clarified_entities": json.loads(row["clarified_entities_json"] or "[]"),
+        "ambiguities_remaining": json.loads(row["ambiguities_remaining_json"] or "[]"),
+        "created_at": row["created_at"],
+    }
 
 
-def _run_simulation(job_id: str, request: dict):
-    try:
-        intent = request.get("user_intent")
-        result = generate_initial_graph(intent, top_k=10)
-        store = get_job_store()
-        store.update_job(job_id, status="completed", progress=100, result=result)
-    except Exception as exc:
-        store = get_job_store()
-        store.update_job(job_id, status="failed", error_message=str(exc))
+def _simulation_worker(request: Request) -> SimulationJobWorker:
+    worker = getattr(request.app.state, "simulation_worker", None)
+    current_job_store = getattr(request.app.state, "job_store", None)
+    current_vector_store = getattr(request.app.state, "vector_store", None)
+    if worker is not None and getattr(worker, "job_store", None) is current_job_store and getattr(worker, "vector_store", None) is current_vector_store:
+        return worker
+
+    job_store = current_job_store
+    if job_store is None:
+        job_store = get_job_store()
+        request.app.state.job_store = job_store
+
+    vector_store = current_vector_store
+    if vector_store is None:
+        from ..database.vector_store import get_vector_store
+
+        vector_store = get_vector_store()
+        request.app.state.vector_store = vector_store
+
+    worker = SimulationJobWorker(job_store=job_store, vector_store=vector_store)
+    request.app.state.simulation_worker = worker
+    worker.start()
+    return worker
 
 
 @router.post("/start")
-def start_simulation(payload: dict) -> JobSubmission:
-    # payload must contain user_intent_id and optional persona
-    user_intent_id = payload.get("user_intent_id")
-    if not user_intent_id:
-        raise HTTPException(status_code=400, detail="user_intent_id required")
+def start_simulation(payload: StartSimRequest, request: Request) -> JobSubmission:
+    worker = _simulation_worker(request)
     try:
-        user_intent = _fetch_user_intent(user_intent_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="UserIntent not found")
+        _fetch_user_intent(payload.user_intent_id, db_path=str(worker.job_store.db_path))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="UserIntent not found") from exc
 
-    job_store = get_job_store()
-    request = {"user_intent": user_intent, "persona": payload.get("persona")}
-    job = job_store.create_simulation_job(request)
-    # run simulation synchronously for now (could be background task)
-    try:
-        _run_simulation(job.id, request)
-    except Exception:
-        pass
+    job = worker.enqueue_start(
+        user_intent_id=payload.user_intent_id,
+        persona=payload.persona,
+        webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
+    )
+    return JobSubmission(job_id=job.id, status="queued")
+
+
+@router.post("/branch")
+def branch_simulation(payload: BranchSimRequest, request: Request) -> JobSubmission:
+    worker = _simulation_worker(request)
+
+    with get_connection(worker.job_store.db_path) as connection:
+        session = connection.execute("SELECT id FROM sessions WHERE id = ?", (payload.session_id,)).fetchone()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        node = connection.execute(
+            "SELECT id FROM nodes WHERE session_id = ? AND id = ?",
+            (payload.session_id, payload.parent_node_id),
+        ).fetchone()
+        if node is None:
+            raise HTTPException(status_code=404, detail="Parent node not found")
+
+    job = worker.enqueue_branch(
+        session_id=payload.session_id,
+        parent_node_id=payload.parent_node_id,
+        action_description=payload.action_description,
+        persona=payload.persona,
+        webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
+    )
     return JobSubmission(job_id=job.id, status="queued")
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str):
-    store = get_job_store()
+def get_job(job_id: str, request: Request):
+    store = getattr(request.app.state, "job_store", None) or get_job_store()
     try:
         job = store.get_job(job_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="job not found")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="job not found") from exc
     return {
         "id": job.id,
         "status": job.status,
@@ -75,6 +134,3 @@ def get_job(job_id: str):
         "result": job.result,
         "error_message": job.error_message,
     }
-from fastapi import APIRouter
-
-router = APIRouter()

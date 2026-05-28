@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     simulation_temperature: float = 0.7
     simulation_max_tokens: int = 1024
     simulation_retry_penalty: float = 0.1
+    simulation_worker_poll_interval_seconds: float = 0.25
+    simulation_use_nli_grounding: bool = False
 
     try:
         model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

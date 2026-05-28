@@ -149,6 +149,39 @@ class SQLiteJobStore:
             raise KeyError(job_id)
         return self._row_to_record(row)
 
+    def claim_next_simulation_job(self) -> JobRecord | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT *
+                FROM jobs
+                WHERE job_type = 'simulation' AND status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                return None
+
+            job_id = str(row["id"])
+            now = self._now()
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'running', current_step = 'starting', progress = MAX(progress, 1), updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now, job_id),
+            )
+            connection.commit()
+
+            refreshed = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if refreshed is None:
+                return None
+            return self._row_to_record(refreshed)
+
 
 def get_job_store(db_path: str | Path | None = None) -> SQLiteJobStore:
     return SQLiteJobStore(db_path)
