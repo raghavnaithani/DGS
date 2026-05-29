@@ -6,16 +6,6 @@ from datasets import Dataset
 import sys
 import types
 
-# Compatibility shim: some ragas versions import langchain_community.chat_models.vertexai
-# which may not be present in minimal test environments. Provide a no-op stub so the
-# library can be imported for offline metric evaluation inside tests.
-if "langchain_community.chat_models.vertexai" not in sys.modules:
-    _m = types.ModuleType("langchain_community.chat_models.vertexai")
-    class ChatVertexAI:  # type: ignore
-        pass
-    _m.ChatVertexAI = ChatVertexAI
-    sys.modules["langchain_community.chat_models.vertexai"] = _m
-
 # Reuse the seeded evaluation fixture defined in the eval suite module
 from tests.test_retrieval_eval_suite import retrieval_eval_environment
 
@@ -25,6 +15,7 @@ def _build_expected_map(corpus):
 
 
 @pytest.mark.usefixtures("retrieval_eval_environment")
+@pytest.mark.integration
 def test_ragas_retrieval_quality(retrieval_eval_environment):
     """Run an automated retrieval-quality check using ragas when available.
 

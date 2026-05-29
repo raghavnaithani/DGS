@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -81,18 +82,53 @@ class NodeGenerator:
             "max_tokens": int(settings.simulation_max_tokens),
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.post(self.api_url, headers=headers, json=payload)
-        except Exception as exc:
-            raise NodeGenerationError(f"Groq API request failed: {exc}")
-        if resp.status_code >= 400:
-            raise NodeGenerationError(f"Groq API error: {resp.text}")
-        data = resp.json()
-        try:
-            return data["choices"][0]["message"]["content"]
-        except Exception as exc:
-            raise NodeGenerationError("Groq returned invalid response") from exc
+        max_retries = 3
+        for attempt in range(0, max_retries):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(self.api_url, headers=headers, json=payload)
+            except Exception as exc:
+                # Network or client-level error: retry (honour max_retries)
+                if attempt < max_retries - 1:
+                    wait = 2 * (2 ** attempt)
+                    logger.warning(
+                        "Groq request failed (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise NodeGenerationError(f"Groq API request failed: {exc}")
+
+            # Rate limited — follow Retry-After if present, otherwise exponential backoff
+            if resp.status_code == 429:
+                ra = resp.headers.get("Retry-After")
+                try:
+                    wait = float(ra) if ra else 2 * (2 ** attempt)
+                except Exception:
+                    wait = 2 * (2 ** attempt)
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        "Groq rate-limited (429). Retry-After=%s; retrying in %.1fs (attempt %d/%d)",
+                        ra,
+                        wait,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    time.sleep(wait)
+                    continue
+                raise NodeGenerationError(f"Groq API rate-limited: {resp.text}")
+
+            if resp.status_code >= 400:
+                raise NodeGenerationError(f"Groq API error: {resp.text}")
+
+            data = resp.json()
+            try:
+                return data["choices"][0]["message"]["content"]
+            except Exception as exc:
+                raise NodeGenerationError("Groq returned invalid response") from exc
 
     def _extract_json(self, content: str) -> dict[str, Any]:
         try:
