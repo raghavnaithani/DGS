@@ -250,3 +250,66 @@ def generate_deterministic_skeleton(
         time_step += 1
 
     return {"nodes": nodes, "edges": edges}
+
+
+def merge_graphs(graph1: dict[str, Any], graph2: dict[str, Any]) -> dict[str, Any]:
+    """
+    Merge two sequential graphs (e.g., month 0-3 and month 4-6).
+    Offsets the time_step of graph2 by +3 and connects the leaf nodes of graph1
+    to the root node of graph2.
+    """
+    import copy
+    
+    g1_nodes = copy.deepcopy(graph1.get("nodes", []))
+    g1_edges = copy.deepcopy(graph1.get("edges", []))
+    g2_nodes = copy.deepcopy(graph2.get("nodes", []))
+    g2_edges = copy.deepcopy(graph2.get("edges", []))
+    
+    # 1. Offset time_step and namespace IDs in graph2
+    id_mapping = {}
+    for node in g2_nodes:
+        old_id = node.get("id")
+        new_id = f"g2_{old_id}"
+        id_mapping[old_id] = new_id
+        node["id"] = new_id
+        
+        # Offset time step by +3
+        current_time_step = node.get("time_step", 0)
+        node["time_step"] = current_time_step + 3
+        
+    for edge in g2_edges:
+        if edge.get("source") in id_mapping:
+            edge["source"] = id_mapping[edge["source"]]
+        if edge.get("target") in id_mapping:
+            edge["target"] = id_mapping[edge["target"]]
+            
+    # 2. Identify leaf nodes in graph1 (nodes with no outgoing edges)
+    sources_in_g1 = set(edge.get("source") for edge in g1_edges)
+    leaf_nodes_g1 = [node.get("id") for node in g1_nodes if node.get("id") not in sources_in_g1]
+    
+    # If no edges at all, the root/only node is the leaf
+    if not leaf_nodes_g1 and g1_nodes:
+        leaf_nodes_g1 = [g1_nodes[-1].get("id")]
+        
+    # 3. Identify root node of graph2 (node with no incoming edges)
+    targets_in_g2 = set(edge.get("target") for edge in g2_edges)
+    root_nodes_g2 = [node.get("id") for node in g2_nodes if node.get("id") not in targets_in_g2]
+    
+    if not root_nodes_g2 and g2_nodes:
+        root_nodes_g2 = [g2_nodes[0].get("id")]
+        
+    # 4. Create connecting edges
+    connecting_edges = []
+    for leaf in leaf_nodes_g1:
+        for root in root_nodes_g2:
+            connecting_edges.append({
+                "source": leaf,
+                "target": root,
+                "action_description": "Continue plan to next phase"
+            })
+            
+    # Combine
+    return {
+        "nodes": g1_nodes + g2_nodes,
+        "edges": g1_edges + connecting_edges + g2_edges
+    }

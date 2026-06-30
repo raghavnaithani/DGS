@@ -24,7 +24,7 @@ def _load_graph(db_path: str, *, session_id: str) -> dict:
             """
             SELECT id, session_id, title, summary, description, time_step, created_by_engine,
                    alternatives_json, risks_json, source_citations_json, confidence_score,
-                   speculative, created_at
+                   speculative, watchpoints_json, created_at
             FROM nodes
             WHERE session_id = ?
             ORDER BY time_step ASC, created_at ASC
@@ -67,6 +67,7 @@ def _load_graph(db_path: str, *, session_id: str) -> dict:
                 "source_citations": json.loads(row["source_citations_json"] or "[]"),
                 "confidence_score": float(row["confidence_score"]),
                 "speculative": bool(row["speculative"]),
+                "watchpoints": json.loads(row["watchpoints_json"] or "[]"),
                 "created_at": row["created_at"],
             }
             for row in nodes

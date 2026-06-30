@@ -12,8 +12,7 @@ def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, par
         "Strict limits: summary <= 15 words. description: 40-80 words, containing >=1 concrete action. alternatives: 1-2 max, description <= 15 words. risks: 1-2 max, mitigation <= 10 words.",
     ]
 
-    if horizon_months >= 6:
-        parts.append("Include watchpoints: 2 concise items.")
+    parts.append("Include watchpoints: 2 concise items if asked, otherwise empty array.")
 
     parts.extend([
         "",
@@ -21,7 +20,7 @@ def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, par
         '{"id": str, "title": str, "summary": str, "description": str, "time_step": int, "created_by_engine": str, "created_at": str,',
         '"alternatives": [{"id": str, "action_type": str, "description": str}],',
         '"risks": [{"id": str, "description": str, "severity": "Low|Medium|High|Critical", "likelihood": "Low|Medium|High", "mitigation_strategy": str}],',
-        '"source_citations": [str], "confidence_score": float, "speculative": bool' + (', "watchpoints": [{"id": str, "text": str}]}' if horizon_months >= 6 else '}'),
+        '"source_citations": [str], "confidence_score": float, "speculative": bool, "watchpoints": [{"id": str, "text": str}]}',
         "",
         f"Context: step={time_step}, intent={user_intent_json}, evidence={evidence_chunks_json}",
     ])
