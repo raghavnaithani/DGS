@@ -33,7 +33,9 @@ class _InMemoryTable:
 
     def top_k_by_cosine(self, query_embedding: list[float], limit: int) -> list[dict]:
         def _cosine(lhs: list[float], rhs: list[float]) -> float:
-            if not lhs or not rhs or len(lhs) != len(rhs):
+            lhs_len = len(lhs) if lhs is not None else 0
+            rhs_len = len(rhs) if rhs is not None else 0
+            if lhs_len == 0 or rhs_len == 0 or lhs_len != rhs_len:
                 return 0.0
             dot = sum(a * b for a, b in zip(lhs, rhs))
             lhs_norm = sqrt(sum(a * a for a in lhs))
@@ -95,6 +97,7 @@ def _chunk_schema() -> pa.Schema:
                 ("ttl_days", pa.int64()),
                 ("verification_status", pa.string()),
                 ("similarity_score", pa.float64()),
+                ("actionability_score", pa.float64()),
             ]
         )
     # Fallback: return None when pyarrow isn't available; callers should tolerate this in-memory mode.
@@ -150,7 +153,9 @@ class LanceChunkStore:
 
     @staticmethod
     def _cosine_similarity(lhs: list[float], rhs: list[float]) -> float:
-        if not lhs or not rhs or len(lhs) != len(rhs):
+        lhs_len = len(lhs) if lhs is not None else 0
+        rhs_len = len(rhs) if rhs is not None else 0
+        if lhs_len == 0 or rhs_len == 0 or lhs_len != rhs_len:
             return 0.0
         dot = sum(a * b for a, b in zip(lhs, rhs))
         lhs_norm = sqrt(sum(a * a for a in lhs))
@@ -165,7 +170,9 @@ class LanceChunkStore:
 
         ranked: list[tuple[float, dict]] = []
         for row in self._row_cache.values():
-            embedding = row.get("embedding") or []
+            embedding = row.get("embedding")
+            if embedding is None:
+                embedding = []
             similarity = self._cosine_similarity(query_embedding, embedding)
             ranked.append((similarity, dict(row)))
 

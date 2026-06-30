@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from ..database.connection import get_connection
 from ..database.jobs_store import get_job_store
@@ -18,8 +18,12 @@ class StartSimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     user_intent_id: str
+    disable_scraping: bool = False
     persona: str | None = None
     webhook_url: HttpUrl | None = None
+    depth: int | None = Field(default=None, ge=1)
+    branching_factor: int | None = Field(default=None, ge=1)
+    mode: str | None = Field(default="quick")
 
 
 class BranchSimRequest(BaseModel):
@@ -30,6 +34,8 @@ class BranchSimRequest(BaseModel):
     action_description: str
     persona: str | None = None
     webhook_url: HttpUrl | None = None
+    depth: int | None = Field(default=1, ge=1)
+    branching_factor: int | None = Field(default=2, ge=1)
 
 
 def _fetch_user_intent(intent_id: str, db_path: str | None = None) -> dict:
@@ -89,8 +95,12 @@ def start_simulation(payload: StartSimRequest, request: Request) -> JobSubmissio
 
     job = worker.enqueue_start(
         user_intent_id=payload.user_intent_id,
+        disable_scraping=payload.disable_scraping,
         persona=payload.persona,
         webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
+        depth=payload.depth,
+        branching_factor=payload.branching_factor,
+        mode=payload.mode,
     )
     return JobSubmission(job_id=job.id, status="queued")
 
@@ -116,6 +126,8 @@ def branch_simulation(payload: BranchSimRequest, request: Request) -> JobSubmiss
         action_description=payload.action_description,
         persona=payload.persona,
         webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
+        depth=payload.depth,
+        branching_factor=payload.branching_factor,
     )
     return JobSubmission(job_id=job.id, status="queued")
 

@@ -33,6 +33,7 @@ class RankedChunk:
     bm25_score: float | None = None
     bm25_raw_score: float | None = None
     rrf_score: float = 0.0
+    actionability_score: float = 0.0
     context_type: str = "evidence"
 
     def to_response(self) -> RetrievedEvidenceChunk:
@@ -51,6 +52,7 @@ class RankedChunk:
             rrf_score=self.rrf_score,
             dense_similarity=self.dense_similarity,
             bm25_score=self.bm25_score,
+            actionability_score=self.actionability_score,
             context_type=self.context_type,
         )
 
@@ -234,7 +236,7 @@ class HybridRetriever:
 
         ranked = sorted(
             merged.values(),
-            key=lambda item: (item.rrf_score, item.dense_similarity or 0.0),
+            key=lambda item: (item.rrf_score, item.dense_similarity or 0.0, item.actionability_score),
             reverse=True,
         )
         return ranked
@@ -367,6 +369,7 @@ class HybridRetriever:
             dense_similarity=dense_similarity,
             bm25_score=bm25_score,
             bm25_raw_score=bm25_raw_score,
+            actionability_score=float(row.get("actionability_score") or 0.0),
             context_type=context_type,
         )
 

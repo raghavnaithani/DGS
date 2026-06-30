@@ -17,6 +17,29 @@ __pycache__/
 completion status/
 COMPLETION_LOG.txt
 backend/app/database/dgs_phase1.sqlite3
+backend/app/database/dgs_phase1.sqlite3-shm
+backend/app/database/dgs_phase1.sqlite3-wal
+*.tsbuildinfo
 backend/.dgs_lancedb/
 \.dgs_lancedb/
 backend/.retrieval_eval_logs/
+raw_logs/
+context/
+
+# Outputs, Results & Auxillary
+backend/simulation_runs/
+backend/scratch/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/*.sqlite3
+backend/*.sqlite3-shm
+backend/*.sqlite3-wal
+backend/poc_*.json
+backend/run_output_*.json
+run_output_*.json
+FULL_PIPELINE_*.md
+v0.1_*.txt
+ddg.html
+diffs.docx
+diffs.txt

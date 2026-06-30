@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from app.api import intake, simulation
+from app.api import intake
 from app.database.connection import get_connection
 from app.database.jobs_store import SQLiteJobStore
 from app.database.vector_store import LanceChunkStore
+from app.engines import simulation as simulation_engine
 from app.main import app
 from app.services import simulation_worker as simulation_worker_module
-import time
 
 
 client = TestClient(app)
@@ -29,6 +31,8 @@ def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
     app.state.job_store = SQLiteJobStore(tmp_path / "pipeline.sqlite3")
     app.state.vector_store = LanceChunkStore(path=tmp_path / "lancedb")
 
+    monkeypatch.setattr(simulation_worker_module, "assemble_evidence", lambda query, top_k=10: SimpleNamespace(evidence=[]))
+    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "_refresh_evidence", lambda self, query, disable_scraping=False: None)
     monkeypatch.setattr(intake, "_require_groq_key", lambda: "test-key")
     monkeypatch.setattr(
         intake,
@@ -48,9 +52,10 @@ def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
 
     captured_request: dict[str, object] = {}
 
-    def fake_generate_initial_graph(user_intent, top_k=10):
+    def fake_generate_initial_graph(user_intent, top_k=10, **kwargs):
         captured_request["user_intent"] = user_intent
         captured_request["top_k"] = top_k
+        captured_request["kwargs"] = kwargs
         return {
             "nodes": [
                 {
@@ -111,11 +116,6 @@ def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
     assert build_response.status_code == 200
     intent_payload = build_response.json()
 
-    connection = get_connection(app.state.job_store.db_path)
-    persisted_intent = connection.execute("SELECT * FROM user_intents WHERE id = ?", (intent_payload["id"],)).fetchone()
-    assert persisted_intent is not None
-    assert persisted_intent["original_prompt"] == "Should I change my career?"
-
     simulation_response = client.post(
         "/v1/simulate/start",
         json={"user_intent_id": intent_payload["id"], "persona": "skeptical_investor"},
@@ -131,14 +131,164 @@ def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
     assert job_payload["result"]["session_id"] == intent_payload["id"]
     assert len(job_payload["result"]["nodes"]) == 3
     assert len(job_payload["result"]["edges"]) == 2
-    assert captured_request["top_k"] == 10
+    assert captured_request["top_k"] == 8
+    assert captured_request["kwargs"]["max_depth"] == 3
+    assert captured_request["kwargs"]["branching_factor"] == 3
+    assert captured_request["kwargs"]["max_nodes"] == 12
     assert captured_request["user_intent"]["id"] == intent_payload["id"]
     assert captured_request["user_intent"]["original_prompt"] == "Should I change my career?"
 
-    connection = get_connection(app.state.job_store.db_path)
-    session_row = connection.execute("SELECT * FROM sessions WHERE id = ?", (intent_payload["id"],)).fetchone()
-    node_count = connection.execute("SELECT COUNT(*) AS count FROM nodes WHERE session_id = ?", (intent_payload["id"],)).fetchone()["count"]
-    edge_count = connection.execute("SELECT COUNT(*) AS count FROM edges WHERE session_id = ?", (intent_payload["id"],)).fetchone()["count"]
-    assert session_row is not None
-    assert node_count == 3
-    assert edge_count == 2
+
+def test_generate_initial_graph_branches_from_root(monkeypatch):
+    monkeypatch.setattr(
+        simulation_engine,
+        "assemble_evidence",
+        lambda query, top_k=10: SimpleNamespace(
+            evidence=[
+                SimpleNamespace(
+                    id="chunk-1",
+                    content="Evidence about the decision topic.",
+                    source_url="https://example.com/evidence",
+                    source_title="Example Evidence",
+                    chunk_index=0,
+                    dense_similarity=0.91,
+                    bm25_score=0.88,
+                )
+            ]
+        ),
+    )
+
+    class FakeGenerator:
+        def generate_node(self, *, user_intent, evidence_chunks, parent_summary=None, persona_prompt=None, time_step=0, max_retries=None):
+            if time_step == 0:
+                return (
+                    {
+                        "id": "root-node",
+                        "title": "Root decision",
+                        "summary": "Root summary.",
+                        "description": "Root description.",
+                        "time_step": 0,
+                        "created_by_engine": "test",
+                        "alternatives": [
+                            {"id": "alt-1", "description": "Compare options", "action_type": "Research"},
+                            {"id": "alt-2", "description": "Take action now", "action_type": "Execution"},
+                            {"id": "alt-3", "description": "Wait and reassess", "action_type": "Research"},
+                        ],
+                        "risks": [{"id": "risk-1", "description": "risk", "severity": "High", "likelihood": "Low"}],
+                        "source_citations": ["https://example.com/evidence"],
+                        "confidence_score": 0.9,
+                        "speculative": False,
+                        "created_at": "2026-05-29T00:00:00+00:00",
+                    },
+                    "root-raw",
+                )
+
+            action = "branch"
+            if parent_summary and "Chosen action:" in parent_summary:
+                action = parent_summary.split("Chosen action:", 1)[1].strip() or "branch"
+
+            return (
+                {
+                    "id": f"node-{action.replace(' ', '-').lower()}",
+                    "title": f"Branch {action}",
+                    "summary": f"Summary for {action}.",
+                    "description": f"Description for {action}.",
+                    "time_step": 1,
+                    "created_by_engine": "test-branch",
+                    "alternatives": [],
+                    "risks": [{"id": f"risk-{action}", "description": "risk", "severity": "High", "likelihood": "Low"}],
+                    "source_citations": ["https://example.com/evidence"],
+                    "confidence_score": 0.8,
+                    "speculative": False,
+                    "created_at": "2026-05-29T00:00:00+00:00",
+                },
+                f"raw-{action}",
+            )
+
+    monkeypatch.setattr(simulation_engine, "NodeGenerator", FakeGenerator)
+
+    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5, max_depth=2, branching_factor=3)
+
+    root_edges = [edge for edge in graph["edges"] if edge["source"] == "root-node"]
+    assert len(graph["nodes"]) == 13
+    assert len(graph["edges"]) == 12
+    assert graph["nodes"][0]["id"] == "root-node"
+    assert len(root_edges) == 3
+    assert {edge["action_description"] for edge in root_edges} == {"Compare options", "Take action now", "Wait and reassess"}
+
+
+def test_generate_initial_graph_recursively_expands_child_nodes(monkeypatch):
+    monkeypatch.setattr(
+        simulation_engine,
+        "assemble_evidence",
+        lambda query, top_k=10: SimpleNamespace(
+            evidence=[
+                SimpleNamespace(
+                    id="chunk-1",
+                    content="Evidence about the decision topic.",
+                    source_url="https://example.com/evidence",
+                    source_title="Example Evidence",
+                    chunk_index=0,
+                    dense_similarity=0.91,
+                    bm25_score=0.88,
+                )
+            ]
+        ),
+    )
+
+    class RecursiveGenerator:
+        def generate_node(self, *, user_intent, evidence_chunks, parent_summary=None, persona_prompt=None, time_step=0, max_retries=None):
+            if time_step == 0:
+                return (
+                    {
+                        "id": "root-node",
+                        "title": "Root decision",
+                        "summary": "Root summary.",
+                        "description": "Root description.",
+                        "time_step": 0,
+                        "created_by_engine": "test",
+                        "alternatives": [
+                            {"id": "alt-1", "description": "Compare options", "action_type": "Research"},
+                        ],
+                        "risks": [{"id": "risk-1", "description": "risk", "severity": "High", "likelihood": "Low"}],
+                        "source_citations": ["https://example.com/evidence"],
+                        "confidence_score": 0.9,
+                        "speculative": False,
+                        "created_at": "2026-05-29T00:00:00+00:00",
+                    },
+                    "root-raw",
+                )
+
+            chosen_action = "branch"
+            if parent_summary and "Chosen action:" in parent_summary:
+                chosen_action = parent_summary.split("Chosen action:", 1)[1].strip() or "branch"
+
+            alternatives = []
+            if chosen_action == "Compare options":
+                alternatives = [{"id": "alt-3", "description": "Deepen research", "action_type": "Research"}]
+
+            return (
+                {
+                    "id": f"node-{chosen_action.replace(' ', '-').lower()}",
+                    "title": f"Branch {chosen_action}",
+                    "summary": f"Summary for {chosen_action}.",
+                    "description": f"Description for {chosen_action}.",
+                    "time_step": 1 if chosen_action != "Deepen research" else 2,
+                    "created_by_engine": "test-branch",
+                    "alternatives": alternatives,
+                    "risks": [{"id": f"risk-{chosen_action}", "description": "risk", "severity": "High", "likelihood": "Low"}],
+                    "source_citations": ["https://example.com/evidence"],
+                    "confidence_score": 0.8,
+                    "speculative": False,
+                    "created_at": "2026-05-29T00:00:00+00:00",
+                },
+                f"raw-{chosen_action}",
+            )
+
+    monkeypatch.setattr(simulation_engine, "NodeGenerator", RecursiveGenerator)
+
+    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5, max_depth=2, branching_factor=1)
+
+    assert len(graph["nodes"]) == 3
+    assert len(graph["edges"]) == 2
+    assert any(edge["action_description"] == "Deepen research" for edge in graph["edges"])

@@ -132,6 +132,15 @@ def _pack_section(section: _Section) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
+def _calculate_actionability(text: str) -> float:
+    score = 0.0
+    if re.search(r'\b(apply|submit|enroll|register|download|install|create|build|join|attend)\b', text, re.IGNORECASE):
+        score += 0.5
+    if re.search(r'(\$|€|£|\d+\s*(days|weeks|months|years|hours))', text, re.IGNORECASE):
+        score += 0.5
+    return min(1.0, score)
+
+
 def chunk_markdown(
     markdown: str,
     *,
@@ -163,6 +172,7 @@ def chunk_markdown(
                     created_at=created_at,
                     ttl_days=ttl_days,
                     verification_status="unverified",
+                    actionability_score=_calculate_actionability(chunk_text),
                 )
             )
             chunk_index += 1

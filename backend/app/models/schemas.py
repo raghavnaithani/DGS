@@ -10,7 +10,9 @@ NON_MATERIAL_ACTION_TYPES = {"continue", "wait", "do nothing"}
 
 
 class DGSBaseModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    # extra="ignore" lets LLM-generated fields (e.g. watchpoints) pass validation
+    # without crashing; they are extracted manually before model_dump.
+    model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
 
 
 class Risk(DGSBaseModel):
@@ -47,6 +49,11 @@ class Alternative(DGSBaseModel):
         return value
 
 
+class Watchpoint(DGSBaseModel):
+    id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class DecisionNode(DGSBaseModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
@@ -60,6 +67,7 @@ class DecisionNode(DGSBaseModel):
     confidence_score: float = Field(ge=0.0, le=1.0)
     speculative: bool
     created_at: datetime
+    watchpoints: list[Watchpoint] = Field(default_factory=list)
 
     @field_validator("source_citations")
     @classmethod

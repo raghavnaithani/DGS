@@ -1,5 +1,7 @@
+import asyncio
 from contextlib import asynccontextmanager
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,10 @@ from .models import Alternative, DecisionNode, KnowledgeChunk, Risk, UserIntent
 logger = logging.getLogger(__name__)
 
 PHASE1_MODELS = (Alternative, DecisionNode, KnowledgeChunk, Risk, UserIntent)
+
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 @asynccontextmanager
@@ -47,6 +53,8 @@ app.add_middleware(
     allow_origins=[
         "http://127.0.0.1:3000",
         "http://localhost:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],

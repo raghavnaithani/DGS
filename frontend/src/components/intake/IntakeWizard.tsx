@@ -12,7 +12,7 @@ type IntakeQuestion = {
   hint?: string | null;
 };
 
-type UserIntent = {
+export type UserIntent = {
   id: string;
   original_prompt: string;
   domain: string;
@@ -22,6 +22,10 @@ type UserIntent = {
   personal_context: string;
   clarified_entities: string[];
   ambiguities_remaining: string[];
+};
+
+type IntakeWizardProps = {
+  onIntentReady?: (intent: UserIntent, options: { disableScraping: boolean }) => void;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -47,8 +51,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export function IntakeWizard() {
+export function IntakeWizard({ onIntentReady }: IntakeWizardProps) {
   const [useMock, setUseMock] = useState(DEFAULT_USE_MOCK);
+  const [disableScraping, setDisableScraping] = useState(false);
   const [step, setStep] = useState<"prompt" | "questions" | "intent">("prompt");
   const [prompt, setPrompt] = useState("");
   const [questions, setQuestions] = useState<IntakeQuestion[]>([]);
@@ -133,6 +138,7 @@ export function IntakeWizard() {
             method: "POST",
             body: JSON.stringify({ prompt, answers }),
           });
+      onIntentReady?.(payload, { disableScraping });
       setIntent(payload);
       setStep("intent");
     } catch (fetchError) {
@@ -176,11 +182,8 @@ export function IntakeWizard() {
               type="button"
               onClick={() => setUseMock((value) => !value)}
               className={`relative h-8 w-14 rounded-full border transition ${useMock ? "border-emerald-500 bg-emerald-500" : "border-slate-300 bg-slate-200"}`}
-              aria-pressed={useMock}
             >
-              <span
-                className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition ${useMock ? "left-7" : "left-1"}`}
-              />
+              <span className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition ${useMock ? "left-7" : "left-1"}`} />
             </button>
           </label>
         </div>
@@ -193,15 +196,11 @@ export function IntakeWizard() {
               <span>Progress</span>
               <span>{progress}%</span>
             </div>
-            <div className="h-2 rounded-full bg-slate-100">
-              <div className="h-2 rounded-full bg-slate-900 transition-all" style={{ width: `${progress}%` }} />
-            </div>
+            <progress value={progress} max={100} aria-label="Intake progress" className="h-2 w-full overflow-hidden rounded-full bg-slate-100 [&::-webkit-progress-bar]:rounded-full [&::-webkit-progress-bar]:bg-slate-100 [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:bg-slate-900 [&::-moz-progress-bar]:rounded-full [&::-moz-progress-bar]:bg-slate-900" />
           </div>
         ) : null}
 
-        {error ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
-        ) : null}
+        {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
 
         {step === "prompt" ? (
           <div className="space-y-4">
@@ -222,9 +221,18 @@ export function IntakeWizard() {
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-slate-600">
-                {useMock ? "Mock intake is enabled for fast frontend development." : "Real Groq-powered intake is enabled."}
-              </p>
+              <div className="space-y-2 text-sm text-slate-600">
+                <p>{useMock ? "Mock intake is enabled for fast frontend development." : "Real Groq-powered intake is enabled."}</p>
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={disableScraping}
+                    onChange={(event) => setDisableScraping(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  Disable scraping during simulation
+                </label>
+              </div>
               <button
                 type="button"
                 onClick={startClarify}
@@ -252,6 +260,7 @@ export function IntakeWizard() {
                 <select
                   value={currentAnswer}
                   onChange={(event) => updateAnswer(event.target.value)}
+                  aria-label={currentQuestion.text}
                   className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10"
                 >
                   <option value="">Select an option</option>
@@ -271,6 +280,7 @@ export function IntakeWizard() {
                     max={10}
                     value={currentAnswer || "5"}
                     onChange={(event) => updateAnswer(event.target.value)}
+                    aria-label={currentQuestion.text}
                     className="w-full accent-slate-900"
                   />
                   <div className="flex items-center justify-between text-sm text-slate-600">

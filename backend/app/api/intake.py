@@ -95,9 +95,12 @@ class MockBuildIntentRequest(BaseModel):
 
 
 def _require_groq_key() -> str:
-    api_key = settings.groq_api_key.strip()
+    if settings.enrichment_provider == "gemini":
+        api_key = settings.gemini_api_key.strip() or settings.groq_api_key.strip()
+    else:
+        api_key = settings.groq_api_key.strip() or settings.gemini_api_key.strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="GROQ_API_KEY is missing")
+        raise HTTPException(status_code=400, detail="Gemini or Groq API key is missing")
     return api_key
 
 
@@ -106,6 +109,31 @@ def _http_client() -> httpx.Client:
 
 
 def _chat_completion(api_key: str, prompt: str) -> str:
+    is_gemini = settings.enrichment_provider == "gemini" or (api_key.startswith("AQ.") and settings.enrichment_provider != "groq")
+    
+    if is_gemini:
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ]
+        }
+        with _http_client() as client:
+            response = client.post(url, json=payload, headers={"Content-Type": "application/json"})
+        if response.status_code >= 400:
+            print("GEMINI API ERROR:", response.status_code, response.text)
+            raise HTTPException(status_code=502, detail=f"Gemini API error: {response.text}")
+        data = response.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            print("GEMINI PARSE ERROR:", exc, data)
+            raise HTTPException(status_code=502, detail="Gemini response was missing content") from exc
+
     payload = {
         "model": settings.groq_model or DEFAULT_GROQ_MODEL,
         "messages": [
@@ -118,12 +146,14 @@ def _chat_completion(api_key: str, prompt: str) -> str:
     with _http_client() as client:
         response = client.post(GROQ_API_URL, headers=headers, json=payload)
     if response.status_code >= 400:
+        print("GROQ API ERROR:", response.status_code, response.text)
         raise HTTPException(status_code=502, detail=f"Groq API error: {response.text}")
 
     data = response.json()
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
+        print("GROQ PARSE ERROR:", exc, data)
         raise HTTPException(status_code=502, detail="Groq response was missing content") from exc
 
 

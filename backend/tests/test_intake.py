@@ -78,6 +78,36 @@ def test_build_intent_returns_valid_user_intent(monkeypatch, tmp_path):
     assert row["risk_tolerance"] == 7
 
 
+def test_build_intent_falls_back_from_invalid_horizon(monkeypatch, tmp_path):
+    app.state.job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
+    monkeypatch.setattr(intake, "_require_groq_key", lambda: "test-key")
+    monkeypatch.setattr(
+        intake,
+        "_chat_completion",
+        lambda api_key, prompt: json.dumps(
+            {
+                "domain": "career planning",
+                "horizon_months": 0,
+                "risk_tolerance": 7,
+                "constraints": ["budget"],
+                "personal_context": "Professional exploring a career transition.",
+                "clarified_entities": ["career move"],
+                "ambiguities_remaining": ["salary target"],
+            }
+        ),
+    )
+
+    response = client.post(
+        "/v1/intake/build-intent",
+        json={"prompt": "Should I change my career?", "answers": {"q1": "Career growth"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["horizon_months"] == 6
+    assert payload["risk_tolerance"] == 7
+
+
 def test_build_intent_rejects_missing_answers():
     response = client.post("/v1/intake/build-intent", json={"prompt": "Invest or wait?", "answers": {}})
 

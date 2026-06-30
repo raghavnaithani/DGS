@@ -57,7 +57,8 @@ class IngestionService:
 
             if payload.query:
                 self.job_store.update_job(job_id, current_step="searching sources", progress=10)
-                candidates = await search_web(payload.query, limit=settings.search_max_results)
+                market_aware_query = f"{payload.query} trends 2026 market outlook salary industry growth"
+                candidates = await search_web(market_aware_query, limit=settings.search_max_results)
                 filtered_sources = filter_candidates(candidates)
                 if not filtered_sources and candidates:
                     filtered_sources = candidates[:10]
@@ -74,10 +75,17 @@ class IngestionService:
                 total_sources=len(filtered_sources),
             )
             scrape_targets = [source["url"] for source in filtered_sources]
-            scraped_pages = await scrape_urls(
-                scrape_targets,
-                max_workers=self._resolve_scrape_workers(),
-                disable_live_scraping=settings.disable_live_scraping,
+            scrape_timeout = max(
+                30.0,
+                float(settings.scrape_timeout_seconds) * float(max(1, len(scrape_targets))) + 20.0,
+            )
+            scraped_pages = await asyncio.wait_for(
+                scrape_urls(
+                    scrape_targets,
+                    max_workers=self._resolve_scrape_workers(),
+                    disable_live_scraping=settings.disable_live_scraping,
+                ),
+                timeout=scrape_timeout,
             )
             successful_pages = [page for page in scraped_pages if page.status == "success" and page.markdown.strip()]
             failed_sources = max(0, len(scraped_pages) - len(successful_pages))
@@ -156,7 +164,8 @@ class IngestionService:
                 traceback.print_exc()
             except Exception:
                 pass
-            self.job_store.update_job(job_id, status="failed", progress=100, current_step="failed", error_message=str(exc))
+            message = str(exc).strip() or f"Unhandled ingestion error ({type(exc).__name__})"
+            self.job_store.update_job(job_id, status="failed", progress=100, current_step="failed", error_message=message)
 
     @staticmethod
     def _resolve_scrape_workers() -> int:
@@ -167,28 +176,8 @@ class IngestionService:
         if not texts:
             return []
 
-        batch_size = max(1, settings.embedding_batch_size)
-        worker_count = max(1, settings.embedding_max_workers)
-        batches = [texts[index : index + batch_size] for index in range(0, len(texts), batch_size)]
-
-        if worker_count <= 1 or len(batches) <= 1:
-            embedder = get_embedder()
-            return await asyncio.to_thread(embedder.embed_texts, texts)
-
-        semaphore = asyncio.Semaphore(worker_count)
-
-        async def _embed_batch(index: int, batch: list[str]) -> tuple[int, list[list[float]]]:
-            async with semaphore:
-                vectors = await asyncio.to_thread(get_embedder().embed_texts, batch)
-                return index, vectors
-
-        gathered = await asyncio.gather(*(_embed_batch(index, batch) for index, batch in enumerate(batches)))
-        gathered.sort(key=lambda item: item[0])
-
-        embeddings: list[list[float]] = []
-        for _, vectors in gathered:
-            embeddings.extend(vectors)
-        return embeddings
+        embedder = get_embedder()
+        return await asyncio.to_thread(embedder.embed_texts, texts)
 
     def _store_sqlite_chunks(self, chunks: list[ChunkDocument]) -> None:
         from ..database.connection import get_connection
@@ -199,8 +188,8 @@ class IngestionService:
                     """
                     INSERT INTO chunks (
                         id, session_id, content, source_url, source_title, chunk_index,
-                        embedding_json, created_at, ttl_days, verification_status, similarity_score
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        embedding_json, created_at, ttl_days, verification_status, similarity_score, actionability_score
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chunk.id,
@@ -214,6 +203,7 @@ class IngestionService:
                         chunk.ttl_days,
                         chunk.verification_status,
                         chunk.similarity_score,
+                        chunk.actionability_score,
                     ),
                 )
             connection.commit()

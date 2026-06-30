@@ -7,7 +7,8 @@ except Exception:
 
 class Settings(BaseSettings):
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "gemma2-9b-it"
+    groq_fast_model: str = "gemma2-9b-it"
     disable_live_scraping: bool = False
     lancedb_path: str = ".dgs_lancedb"
     embedding_model: str = "ibm-granite/granite-embedding-30m-english"
@@ -29,7 +30,7 @@ class Settings(BaseSettings):
     retrieval_expand_parents: bool = True
     search_page_delay_seconds: float = 0.25
     # Scraping safety knobs
-    scrape_timeout_seconds: float = 30.0
+    scrape_timeout_seconds: float = 60.0
     # Fraction of sources that may fail before the job aborts early (0.0-1.0)
     scrape_fail_fast_ratio: float = 0.5
     langfuse_public_key: str = ""
@@ -37,17 +38,27 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     supabase_url: str = ""
     supabase_key: str = ""
-    debug: bool = False
+    debug: bool = True
     # Simulation / reasoning settings
-    simulation_max_retries: int = 3
+    simulation_max_retries: int = 2
     simulation_temperature: float = 0.7
-    simulation_max_tokens: int = 1024
+    simulation_max_tokens: int = 1500
+    simulation_skeleton_max_tokens: int = 1200
+    simulation_repair_max_tokens: int = 400
+    simulation_evidence_prompt_chunks: int = 3
+    simulation_evidence_snippet_chars: int = 280
     simulation_retry_penalty: float = 0.1
+    simulation_generation_cooldown_seconds: float = 10.0
     simulation_worker_poll_interval_seconds: float = 0.25
     simulation_use_nli_grounding: bool = False
+    enrichment_provider: str = "groq"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1"
+    ollama_timeout_seconds: float = 300.0
+    gemini_api_key: str = ""
 
     try:
-        model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+        model_config = SettingsConfigDict(env_file="backend/.env", env_file_encoding="utf-8", extra="ignore")
     except Exception:
         model_config = {}
 

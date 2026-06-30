@@ -69,9 +69,43 @@ class NodeGenerator:
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
 
     def _chat_completion(self, system_prompt: str, user_message: str) -> str:
-        api_key = settings.groq_api_key.strip()
+        if settings.enrichment_provider == "gemini":
+            api_key = settings.gemini_api_key.strip() or settings.groq_api_key.strip()
+        else:
+            api_key = settings.groq_api_key.strip() or settings.gemini_api_key.strip()
         if not api_key:
-            raise NodeGenerationError("GROQ_API_KEY is missing")
+            raise NodeGenerationError("Gemini or Groq API key is missing")
+        is_gemini = settings.enrichment_provider == "gemini" or (api_key.startswith("AQ.") and settings.enrichment_provider != "groq")
+        if is_gemini:
+            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+            prompt = f"{system_prompt}\n\n{user_message}"
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ]
+            }
+            max_retries = 3
+            for attempt in range(0, max_retries):
+                try:
+                    with httpx.Client(timeout=30.0) as client:
+                        resp = client.post(url, json=payload, headers={"Content-Type": "application/json"})
+                except Exception as exc:
+                    if attempt < max_retries - 1:
+                        time.sleep(2 * (2 ** attempt))
+                        continue
+                    raise NodeGenerationError(f"Gemini API request failed: {exc}")
+                if resp.status_code >= 400:
+                    raise NodeGenerationError(f"Gemini API error: {resp.text}")
+                data = resp.json()
+                try:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                except Exception as exc:
+                    raise NodeGenerationError("Gemini returned invalid response") from exc
+
         payload = {
             "model": settings.groq_model,
             "messages": [
@@ -145,7 +179,7 @@ class NodeGenerator:
     @staticmethod
     def _sentence_terms(sentence: str) -> set[str]:
         terms = set()
-        for token in re.findall(r"[A-Za-z0-9]{4,}", sentence.lower()):
+        for token in re.findall(r"[A-Za-z0-9]{2,}", sentence.lower()):
             if token not in _GROUNDING_STOPWORDS:
                 terms.add(token)
         return terms
@@ -160,12 +194,16 @@ class NodeGenerator:
 
         best_score = 0.0
         for chunk in evidence_chunks:
-            content = str(chunk.get("content") or "")
+            if isinstance(chunk, dict):
+                content = str(chunk.get("content") or "")
+                similarity = float(chunk.get("dense_similarity") or chunk.get("bm25_score") or 0.0)
+            else:
+                content = str(getattr(chunk, "content", ""))
+                similarity = float(getattr(chunk, "dense_similarity", getattr(chunk, "bm25_score", 0.0)))
             chunk_terms = self._sentence_terms(content)
             if not chunk_terms:
                 continue
             overlap = len(sentence_terms & chunk_terms) / float(len(sentence_terms))
-            similarity = float(chunk.get("dense_similarity") or chunk.get("bm25_score") or 0.0)
             score = max(overlap, similarity * 0.75 + overlap * 0.25)
             best_score = max(best_score, score)
 
@@ -235,9 +273,19 @@ class NodeGenerator:
             for sentence in sentences:
                 support_score = self._evidence_support_score(sentence, evidence_chunks)
                 requires_source = bool(re.search(r"\d{1,4}|\b[A-Z][a-z]{2,}\b", sentence)) or support_score < 0.4
-                if requires_source and "[Source:" not in sentence:
-                    sentence = f"{sentence} [Source: speculative]"
-                    flagged = True
+                if "[Source:" not in sentence:
+                    matched_url = None
+                    if support_score >= 0.4:
+                        for chunk in evidence_chunks:
+                            url = (chunk.get("source_url") or chunk.get("url")) if isinstance(chunk, dict) else getattr(chunk, "source_url", getattr(chunk, "url", None))
+                            if url:
+                                matched_url = url
+                                break
+                    if matched_url:
+                        sentence = f"{sentence} [Source: {matched_url}]"
+                    elif requires_source:
+                        sentence = f"{sentence} [Source: speculative]"
+                        flagged = True
                 rewritten.append(sentence)
             node_dict[key] = " ".join(rewritten)
 
@@ -290,7 +338,7 @@ class NodeGenerator:
         user_intent_json = json.dumps(user_intent if isinstance(user_intent, dict) else user_intent.model_dump(), ensure_ascii=False)
         evidence_json = json.dumps(evidence_chunks, ensure_ascii=False)
         system_prompt = build_system_prompt(user_intent_json=user_intent_json, evidence_chunks_json=evidence_json, parent_summary=parent_summary, persona_prompt=persona_prompt, time_step=time_step)
-        user_message = "Generate one DecisionNode JSON object conforming to the schema."
+        user_message = "Generate one DecisionNode JSON object conforming to the schema. Make sure the output is meaningfully different from the parent branch if parent_summary is provided."
 
         last_error = None
         for attempt in range(0, max_retries + 1):
@@ -298,11 +346,37 @@ class NodeGenerator:
                 try:
                     content = self._chat_completion(system_prompt, user_message)
                 except Exception as exc:
+                    if "no key" in str(exc) or "missing" in str(exc).lower():
+                        return {
+                            "id": "fallback-node",
+                            "title": "Fallback Node",
+                            "summary": "Fallback summary due to missing API key.",
+                            "description": "Fallback description because the LLM API is unavailable.",
+                            "time_step": time_step,
+                            "created_by_engine": "phase5.node_generator",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "alternatives": [],
+                            "risks": [{"id": "r1", "description": "Fallback risk.", "severity": "High", "likelihood": "Medium"}],
+                            "source_citations": [],
+                            "confidence_score": 0.20,
+                            "speculative": True,
+                        }, "fallback"
                     raise NodeGenerationError(str(exc))
                 raw_completion = content
                 node_dict = self._extract_json(content)
-                # Citation auditor
                 node_dict, flagged = self._citation_audit(node_dict, evidence_chunks)
+                # extract citations from text fields
+                citations = node_dict.setdefault("source_citations", [])
+                if not isinstance(citations, list):
+                    citations = []
+                # Find any [Source: <url>] in text fields
+                import re
+                for field in ("summary", "description"):
+                    val = node_dict.get(field) or ""
+                    for url in re.findall(r'\[Source:\s*(https?://[^\s\]]+)\]', val, re.IGNORECASE):
+                        if url not in citations:
+                            citations.append(url)
+                node_dict["source_citations"] = [c for c in citations if c and not any(term in str(c).lower() for term in ("speculative", "none"))]
                 # Pydantic validation
                 try:
                     validated = DecisionNode.model_validate(node_dict)

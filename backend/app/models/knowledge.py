@@ -42,6 +42,7 @@ class ChunkDocument(KnowledgeBaseModel):
 	ttl_days: int = Field(default=30, ge=1)
 	verification_status: Literal["verified", "unverified", "failed"] = "unverified"
 	similarity_score: float | None = Field(default=None, ge=0.0, le=1.0)
+	actionability_score: float = 0.0
 
 	@model_validator(mode="after")
 	def _validate_parent_content(self) -> ChunkDocument:
@@ -68,6 +69,7 @@ class RetrievedEvidenceChunk(KnowledgeBaseModel):
 	rrf_score: float = Field(ge=0.0)
 	dense_similarity: float | None = Field(default=None, ge=0.0, le=1.0)
 	bm25_score: float | None = None
+	actionability_score: float = 0.0
 	context_type: str = "evidence"
 
 

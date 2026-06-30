@@ -37,6 +37,17 @@ TRUSTED_DOMAIN_SUFFIXES = {
     "google.com": 4,
     "openai.com": 4,
     "wikipedia.org": 2,
+    "reddit.com": 6,
+    "news.ycombinator.com": 6,
+    "towardsdatascience.com": 6,
+    "kaggle.com": 6,
+    "lesswrong.com": 5,
+    "stackoverflow.com": 5,
+    "indiehackers.com": 5,
+    "producthunt.com": 5,
+    "medium.com": 4,
+    "docs.python.org": 6,
+    "developer.mozilla.org": 6,
 }
 
 BLACKLIST_DOMAIN_SUFFIXES = {
@@ -45,7 +56,6 @@ BLACKLIST_DOMAIN_SUFFIXES = {
     "instagram.com",
     "tiktok.com",
     "x.com",
-    "reddit.com",
     "linktr.ee",
 }
 
@@ -178,7 +188,7 @@ def _fetch_ddgs_results(query: str, limit: int) -> list[SearchCandidate]:
         return results
     try:
         with DDGS(timeout=20) as ddgs:
-            fallback_results = ddgs.text(query, backend="lite", max_results=limit)
+            fallback_results = ddgs.text(query, max_results=limit)
         for item in fallback_results:
             url = str(item.get("href") or item.get("url") or "").strip()
             title = str(item.get("title") or "").strip()

@@ -64,6 +64,7 @@ SCHEMA_STATEMENTS = (
         source_citations_json TEXT NOT NULL DEFAULT '[]',
         confidence_score REAL NOT NULL CHECK (confidence_score BETWEEN 0.0 AND 1.0),
         speculative INTEGER NOT NULL CHECK (speculative IN (0, 1)),
+        watchpoints_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
@@ -88,6 +89,15 @@ SCHEMA_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_edges_source_node_id ON edges(source_node_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_target_node_id ON edges(target_node_id)",
     """
+    CREATE TABLE IF NOT EXISTS graph_shares (
+        public_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_graph_shares_session_id ON graph_shares(session_id)",
+    """
     CREATE TABLE IF NOT EXISTS chunks (
         id TEXT PRIMARY KEY,
         session_id TEXT,
@@ -100,6 +110,7 @@ SCHEMA_STATEMENTS = (
         ttl_days INTEGER NOT NULL DEFAULT 30 CHECK (ttl_days > 0),
         verification_status TEXT NOT NULL CHECK (verification_status IN ('verified', 'unverified', 'failed')),
         similarity_score REAL CHECK (similarity_score BETWEEN 0.0 AND 1.0),
+        actionability_score REAL DEFAULT 0.0 CHECK (actionability_score BETWEEN 0.0 AND 1.0),
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
     )
     """,
@@ -148,3 +159,20 @@ SCHEMA_STATEMENTS = (
 def apply_schema(connection: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
+
+
+MIGRATION_STATEMENTS = (
+    # Add watchpoints column to existing nodes tables (safe to run multiple times)
+    "ALTER TABLE nodes ADD COLUMN watchpoints_json TEXT NOT NULL DEFAULT '[]'",
+)
+
+
+def apply_migrations(connection: sqlite3.Connection) -> None:
+    """Run additive migrations that are safe to skip if already applied."""
+    for statement in MIGRATION_STATEMENTS:
+        try:
+            connection.execute(statement)
+            connection.commit()
+        except Exception:
+            # Column already exists – ignore
+            pass
