@@ -68,7 +68,7 @@ class NodeGenerator:
     def __init__(self):
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
 
-    def _chat_completion(self, system_prompt: str, user_message: str) -> str:
+    def _chat_completion(self, system_prompt: str, user_message: str, temperature: float | None = None) -> str:
         if settings.enrichment_provider == "gemini":
             api_key = settings.gemini_api_key.strip() or settings.groq_api_key.strip()
         else:
@@ -106,14 +106,19 @@ class NodeGenerator:
                 except Exception as exc:
                     raise NodeGenerationError("Gemini returned invalid response") from exc
 
+        # Groq requires 'JSON' in the prompt when using response_format
+        if "json" not in system_prompt.lower():
+            system_prompt += "\n\nYou MUST return a valid JSON object."
+            
         payload = {
             "model": settings.groq_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            "temperature": float(settings.simulation_temperature),
+            "temperature": temperature if temperature is not None else float(settings.simulation_temperature),
             "max_tokens": int(settings.simulation_max_tokens),
+            "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         max_retries = 3
@@ -336,7 +341,17 @@ class NodeGenerator:
     def generate_node(self, *, user_intent: UserIntent | dict[str, Any], evidence_chunks: list[dict[str, Any]], parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, max_retries: int | None = None) -> tuple[dict[str, Any], str]:
         max_retries = int(max_retries or settings.simulation_max_retries)
         user_intent_json = json.dumps(user_intent if isinstance(user_intent, dict) else user_intent.model_dump(), ensure_ascii=False)
-        evidence_json = json.dumps(evidence_chunks, ensure_ascii=False)
+        
+        # Trim evidence payload to only include content and source_url to save tokens
+        trimmed_evidence = []
+        for chunk in evidence_chunks:
+            if isinstance(chunk, dict):
+                trimmed_evidence.append({
+                    "content": str(chunk.get("content") or ""),
+                    "url": str(chunk.get("source_url") or chunk.get("url") or "")
+                })
+        evidence_json = json.dumps(trimmed_evidence, ensure_ascii=False)
+        
         system_prompt = build_system_prompt(user_intent_json=user_intent_json, evidence_chunks_json=evidence_json, parent_summary=parent_summary, persona_prompt=persona_prompt, time_step=time_step)
         user_message = "Generate one DecisionNode JSON object conforming to the schema. Make sure the output is meaningfully different from the parent branch if parent_summary is provided."
 
@@ -344,7 +359,7 @@ class NodeGenerator:
         for attempt in range(0, max_retries + 1):
             try:
                 try:
-                    content = self._chat_completion(system_prompt, user_message)
+                    content = self._chat_completion(system_prompt, user_message, temperature=float(settings.simulation_enrichment_temperature))
                 except Exception as exc:
                     if "no key" in str(exc) or "missing" in str(exc).lower():
                         return {
@@ -377,6 +392,16 @@ class NodeGenerator:
                         if url not in citations:
                             citations.append(url)
                 node_dict["source_citations"] = [c for c in citations if c and not any(term in str(c).lower() for term in ("speculative", "none"))]
+                
+                desc = str(node_dict.get("description") or "").strip()
+                if not desc:
+                    node_dict["description"] = "Continue exploring this path by executing the core fundamentals"
+                    
+                for risk in node_dict.get("risks") or []:
+                    risk_desc = str(risk.get("description") or "").strip()
+                    if not risk_desc and (risk.get("severity") or risk.get("likelihood")):
+                        risk["description"] = "Unspecified risk"
+                
                 # Pydantic validation
                 try:
                     validated = DecisionNode.model_validate(node_dict)
@@ -388,6 +413,8 @@ class NodeGenerator:
                         continue
                     else:
                         # final fallback
+                        if not node_dict.get("alternatives"):
+                            node_dict["alternatives"] = [{"id": "alt_fallback", "action_type": "option", "description": "1. Explore fallback options ($0, 1 day) - Safe alternative."}]
                         node_dict.setdefault("speculative", True)
                         node_dict.setdefault("source_citations", [])
                         node_dict.setdefault("confidence_score", 0.0)
@@ -395,10 +422,13 @@ class NodeGenerator:
                 # compute confidence
                 confidence = self._compute_confidence(evidence_chunks, retries=attempt, citations_present=not flagged)
                 validated_dict = validated.model_dump(mode="json")
-                validated_dict["confidence_score"] = float(confidence)
-                # ensure speculative set
-                if flagged:
+                if not validated_dict.get("source_citations"):
                     validated_dict["speculative"] = True
+                    validated_dict["confidence_score"] = 0.4
+                else:
+                    validated_dict["confidence_score"] = float(confidence)
+                    if flagged:
+                        validated_dict["speculative"] = True
                 logger.info("Generated DecisionNode id=%s time_step=%s confidence=%.3f speculative=%s", validated_dict.get("id"), validated_dict.get("time_step"), confidence, validated_dict.get("speculative"))
                 return validated_dict, raw_completion
             except NodeGenerationError as exc:

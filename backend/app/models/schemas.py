@@ -61,13 +61,21 @@ class DecisionNode(DGSBaseModel):
     description: str = Field(min_length=1)
     time_step: int = Field(ge=0)
     created_by_engine: str = Field(min_length=1)
-    alternatives: list[Alternative] = Field(default_factory=list)
+    alternatives: list[Alternative] = Field(min_length=1)
     risks: list[Risk] = Field(default_factory=list)
     source_citations: list[str] = Field(default_factory=list)
     confidence_score: float = Field(ge=0.0, le=1.0)
     speculative: bool
     created_at: datetime
     watchpoints: list[Watchpoint] = Field(default_factory=list)
+
+    @field_validator("description")
+    @classmethod
+    def _validate_description_format(cls, value: str) -> str:
+        import re
+        if not re.search(r'\b1[\.\)]', value):
+            raise ValueError("Description must contain numbered steps")
+        return value
 
     @field_validator("source_citations")
     @classmethod

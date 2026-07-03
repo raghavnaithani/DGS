@@ -57,7 +57,7 @@ class IngestionService:
 
             if payload.query:
                 self.job_store.update_job(job_id, current_step="searching sources", progress=10)
-                market_aware_query = f"{payload.query} trends 2026 market outlook salary industry growth"
+                market_aware_query = f"{payload.query} step by step guide practical tips for beginners"
                 candidates = await search_web(market_aware_query, limit=settings.search_max_results)
                 filtered_sources = filter_candidates(candidates)
                 if not filtered_sources and candidates:

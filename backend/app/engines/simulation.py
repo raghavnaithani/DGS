@@ -119,6 +119,7 @@ def generate_llm_skeleton(
         f"summary (string, <=15 words), time_step (0-based integer), alternatives (array of 1-2 objects with id+description <=15 words each), "
         f"risks (array of 1-2 objects with id, severity, likelihood, mitigation <=10 words).\n"
         f"Each edge must have: source (node id), target (node id), action_description (string).\n"
+        f"Ensure branches cover distinct themes (e.g. one branch on financial/budgeting, one on networking/community, one on technical upskilling) to avoid repetition.\n"
         f"time_step 0 = root node. Subsequent steps branch out organically. No markdown, no prose - JSON only."
     )
     user_message = (
@@ -141,8 +142,8 @@ def generate_llm_skeleton(
     now = _now_iso()
     for node in skeleton.get("nodes", []):
         node.setdefault("id", str(uuid4()))
-        node.setdefault("created_at", now)
-        node.setdefault("created_by_engine", "phase5.skeleton_generator")
+        node["created_at"] = now
+        node["created_by_engine"] = "phase5.skeleton_generator"
         node.setdefault("speculative", True)
         node.setdefault("confidence_score", 0.40)
         node.setdefault("source_citations", [])

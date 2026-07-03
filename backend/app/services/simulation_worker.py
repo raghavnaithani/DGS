@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,10 @@ from ..engines.simulation import (
 from ..models.jobs import IngestionRequest
 
 logger = logging.getLogger(__name__)
+
+@lru_cache(maxsize=32)
+def _cached_assemble(branch_query: str, top_k: int):
+    return assemble_evidence(branch_query, top_k=top_k)
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +411,8 @@ class SimulationJobWorker:
 
                 if len(skeleton["nodes"]) < min_acceptable:
                     raise ValueError(f"LLM skeleton generated only {len(skeleton['nodes'])} nodes, minimum acceptable is {min_acceptable}")
+                if len(skeleton.get("edges", [])) < len(skeleton["nodes"]) - 1:
+                    raise ValueError(f"LLM skeleton generated only {len(skeleton.get('edges', []))} edges for {len(skeleton['nodes'])} nodes. Graph would be disconnected.")
                 logger.info("LLM skeleton generated %d nodes and %d edges (target=%d)",
                             len(skeleton.get("nodes", [])), len(skeleton.get("edges", [])), target_nodes)
             except Exception as exc:
@@ -424,11 +431,13 @@ class SimulationJobWorker:
             nodes = skeleton.get("nodes", [])
             total = len(nodes)
             enriched_nodes: list[dict[str, Any]] = []
-            for idx, node in enumerate(nodes):
-                # update progress
+            total_evidence_chunks_retrieved = 0
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            def _process_node_task(idx: int, node: dict[str, Any]) -> dict[str, Any]:
+                nonlocal total_evidence_chunks_retrieved
                 try:
-                    progress = 50 + int(50 * (idx + 1) / max(1, total))
-                    self.job_store.update_job(job_id, status="running", progress=progress, current_step=f"Enriching node {idx+1} of {total}")
+                    self.job_store.update_job(job_id, status="running", progress=50 + int(50 * (idx) / max(1, total)), current_step=f"Enriching node {idx+1} of {total}")
                 except Exception:
                     pass
 
@@ -457,8 +466,7 @@ class SimulationJobWorker:
                         # Fetch evidence for this node's context
                         query_text = (user_intent.get("original_prompt") if isinstance(user_intent, dict) else user_intent.original_prompt) or ""
                         branch_query = f"{query_text}\nAction: {parent_choice}"
-                        from ..engines.retriever import assemble_evidence as _assemble
-                        retrieval = _assemble(branch_query, top_k=3)
+                        retrieval = _cached_assemble(branch_query, top_k=3)
                         evidence_chunks = []
                         for item in retrieval.evidence:
                             evidence_chunks.append({
@@ -470,6 +478,7 @@ class SimulationJobWorker:
                                 "dense_similarity": item.dense_similarity or 0.0,
                                 "bm25_score": item.bm25_score,
                             })
+                        total_evidence_chunks_retrieved += len(evidence_chunks)
                         generator = NodeGenerator()
                         enriched_node, _raw = generator.generate_node(
                             user_intent=user_intent,
@@ -479,6 +488,10 @@ class SimulationJobWorker:
                             time_step=int(node.get("time_step", 0)),
                         )
                         enriched_node["id"] = node["id"]  # keep skeleton id
+                        if "created_at" in node:
+                            enriched_node["created_at"] = node["created_at"]
+                        if "created_by_engine" in node:
+                            enriched_node["created_by_engine"] = node["created_by_engine"]
 
                         # UI Cleanup: Strip speculative tokens from description, alternatives, and risks
                         description = enriched_node.get("description", "")
@@ -507,9 +520,16 @@ class SimulationJobWorker:
                                 cleaned_risks.append(risk)
                             enriched_node["risks"] = cleaned_risks
 
-                        # persist enriched node
-                        self._persist_node(session_id=session_id, node=enriched_node)
+                        # Force confidence score to 0.4 if no valid citations
+                        citations = enriched_node.get("source_citations") or []
+                        valid_citations = [c for c in citations if c and not str(c).lower().strip() in ("speculative", "none", "")]
+                        if not valid_citations:
+                            enriched_node["speculative"] = True
+                            enriched_node["confidence_score"] = 0.4
+                        
+                        # DO NOT persist enriched node here, we will persist sequentially later
                         success = True
+                        return enriched_node
                     except Exception as exc:
                         logger.warning("Enrichment failed for node %s attempt %d/%d: %s", node.get("id"), retries + 1, max_retries, exc)
                         retries += 1
@@ -543,11 +563,51 @@ class SimulationJobWorker:
                             cleaned_risks.append(risk)
                         enriched_node["risks"] = cleaned_risks
 
-                    self._persist_node(session_id=session_id, node=enriched_node)
-
-                enriched_nodes.append(enriched_node)
+                    if not str(enriched_node.get("description") or "").strip():
+                        enriched_node["description"] = "Continue exploring this path by executing the core fundamentals"
+                    for risk in enriched_node.get("risks", []):
+                        if not str(risk.get("description") or "").strip() and (risk.get("severity") or risk.get("likelihood")):
+                            risk["description"] = "Unspecified risk"
+                    if not enriched_node.get("source_citations"):
+                        enriched_node["speculative"] = True
+                        enriched_node["confidence_score"] = 0.4
+                    
+                    if not enriched_node.get("alternatives"):
+                        enriched_node["alternatives"] = [{"id": "alt_fallback", "action_type": "option", "description": "1. Explore fallback options ($0, 1 day) - Safe alternative."}]
+                        
+                return enriched_node
+            
+            results = [None] * total
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {executor.submit(_process_node_task, i, n): i for i, n in enumerate(skeleton.get("nodes", []))}
+                completed_count = 0
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    try:
+                        results[idx] = fut.result()
+                    except Exception as exc:
+                        logger.error("Node enrichment task failed: %s", exc)
+                        fallback_node = skeleton.get("nodes", [])[idx]
+                        if not fallback_node.get("alternatives"):
+                            fallback_node["alternatives"] = [{"id": "alt_fallback", "action_type": "option", "description": "1. Explore fallback options ($0, 1 day) - Safe alternative."}]
+                        results[idx] = fallback_node
+                    
+                    completed_count += 1
+                    try:
+                        progress = 50 + int(50 * completed_count / max(1, total))
+                        self.job_store.update_job(job_id, status="running", progress=progress, current_step=f"Finished {completed_count} of {total}")
+                    except Exception:
+                        pass
+                        
+            for r_node in results:
+                if r_node:
+                    self._persist_node(session_id=session_id, node=r_node)
+                    
+            enriched_nodes = [r for r in results if r is not None]
 
             final_graph = {"nodes": enriched_nodes, "edges": skeleton.get("edges", [])}
+            if total_evidence_chunks_retrieved == 0:
+                final_graph["warnings"] = ["Zero evidence chunks retrieved from the web or database. Results are fully speculative."]
             return {"session_id": session_id, "workflow": "start", **final_graph}
         finally:
             settings.enrichment_provider = original_provider
@@ -840,15 +900,8 @@ class SimulationJobWorker:
                 node["speculative"] = False
                 node["confidence_score"] = 0.85
             else:
-                # Respect a promoted confidence_score from the inner payload if present
-                # and greater than the skeleton default; else apply node-level heuristic.
-                current_conf = float(node.get("confidence_score") or 0.0)
-                if current_conf > 0.20:
-                    # Keep the promoted value; speculative stays as set by _parse_enriched_payload
-                    pass
-                else:
-                    node["speculative"] = True
-                    node["confidence_score"] = 0.40
+                node["speculative"] = True
+                node["confidence_score"] = 0.40
 
         with get_connection(self.job_store.db_path) as connection:
             connection.execute(

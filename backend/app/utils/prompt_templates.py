@@ -9,8 +9,18 @@ def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, par
         "Return one compact DecisionNode JSON object only.",
         "Use provided evidence for factual claims; cite supported claims as [Source: <url>].",
         "If evidence is weak, keep claims practical/general and speculative=true.",
-        "Strict limits: summary <= 15 words. description: 40-80 words, containing >=1 concrete action. alternatives: 1-2 max, description <= 15 words. risks: 1-2 max, mitigation <= 10 words.",
+        "Strict limits: summary <= 15 words. alternatives: 1-4 (ensure organic branching: some nodes should have 1, some 2, some 3-4), description <= 15 words. risks: 1-2 max, mitigation <= 10 words.",
+        "description: Provide 3-4 concrete, numbered steps INSIDE THIS STRING. For each step, include the specific tool/platform/resource, estimated cost/time, and expected outcome.",
+        "CRITICAL: Do NOT invent new JSON keys (e.g. do NOT create a 'steps' array). Output ONLY the keys defined in the schema.",
     ]
+    
+    try:
+        intent_dict = json.loads(user_intent_json)
+        constraints = intent_dict.get("constraints_json", "None")
+    except Exception:
+        constraints = "None"
+        
+    parts.append(f"All suggested actions MUST respect the user's constraints: {constraints}. Do NOT propose steps that exceed their budget or availability.")
 
     parts.append("Include watchpoints: 2 concise items if asked, otherwise empty array.")
 
@@ -45,4 +55,5 @@ Rules:
 - Target exactly {target_nodes} nodes total.
 - Horizon: {horizon_months} months. time_steps: 0..{min(horizon_months, 4)}.
 - Root is time_step 0.
+- Ensure organic branching: some nodes should have 1 outgoing edge, some 2, some 3-4.
 Return JSON only."""

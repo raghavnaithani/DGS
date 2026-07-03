@@ -42,11 +42,12 @@ class Settings(BaseSettings):
     # Simulation / reasoning settings
     simulation_max_retries: int = 2
     simulation_temperature: float = 0.7
+    simulation_enrichment_temperature: float = 0.8
     simulation_max_tokens: int = 1500
     simulation_skeleton_max_tokens: int = 1200
     simulation_repair_max_tokens: int = 400
     simulation_evidence_prompt_chunks: int = 3
-    simulation_evidence_snippet_chars: int = 280
+    simulation_evidence_snippet_chars: int = 300
     simulation_retry_penalty: float = 0.1
     simulation_generation_cooldown_seconds: float = 10.0
     simulation_worker_poll_interval_seconds: float = 0.25
