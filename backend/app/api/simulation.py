@@ -24,6 +24,7 @@ class StartSimRequest(BaseModel):
     depth: int | None = Field(default=None, ge=1)
     branching_factor: int | None = Field(default=None, ge=1)
     mode: str | None = Field(default="quick")
+    target_nodes: int | None = Field(default=None, ge=1)
 
 
 class BranchSimRequest(BaseModel):
@@ -101,6 +102,7 @@ def start_simulation(payload: StartSimRequest, request: Request) -> JobSubmissio
         depth=payload.depth,
         branching_factor=payload.branching_factor,
         mode=payload.mode,
+        target_nodes=payload.target_nodes,
     )
     return JobSubmission(job_id=job.id, status="queued")
 

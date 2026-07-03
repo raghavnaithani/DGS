@@ -234,6 +234,7 @@ class SimulationJobWorker:
         depth: int | None = None,
         branching_factor: int | None = None,
         mode: str | None = None,
+        target_nodes: int | None = None,
     ) -> Any:
         job = self.job_store.create_simulation_job(
             {
@@ -245,6 +246,7 @@ class SimulationJobWorker:
                 "depth": depth,
                 "branching_factor": branching_factor,
                 "mode": mode,
+                "target_nodes": target_nodes,
             }
         )
         self.kick()
@@ -338,13 +340,16 @@ class SimulationJobWorker:
                 self._refresh_evidence(user_intent["original_prompt"], disable_scraping=False)
 
         horizon_months = int(user_intent.get("horizon_months") or 0)
-        default_depth, default_branching, target_nodes = _horizon_defaults(horizon_months)
-        depth = request.get("depth")
-        branching_factor = request.get("branching_factor")
-        if depth is None:
-            depth = default_depth
-        if branching_factor is None:
-            branching_factor = default_branching
+        
+        # Apply horizon defaults or explicit overrides
+        depth_override = request.get("depth")
+        branching_override = request.get("branching_factor")
+        target_override = request.get("target_nodes")
+        
+        def_d, def_b, def_target = _horizon_defaults(horizon_months)
+        depth = depth_override if depth_override else def_d
+        branching_factor = branching_override if branching_override else def_b
+        target_nodes = target_override if target_override else def_target
 
         # Determine whether to run the detailed skeleton+enrich flow
         # Always use skeleton+enrich flow for all horizons; 'detailed' mode also forces it
@@ -403,11 +408,11 @@ class SimulationJobWorker:
                     raise ValueError("Invalid LLM skeleton output structure")
                 
                 if horizon_months <= 3:
-                    min_acceptable = 6
+                    min_acceptable = min(6, target_nodes)
                 elif horizon_months <= 6:
-                    min_acceptable = 10
+                    min_acceptable = min(10, target_nodes)
                 else:
-                    min_acceptable = 12
+                    min_acceptable = min(12, target_nodes)
 
                 if len(skeleton["nodes"]) < min_acceptable:
                     raise ValueError(f"LLM skeleton generated only {len(skeleton['nodes'])} nodes, minimum acceptable is {min_acceptable}")
@@ -417,7 +422,7 @@ class SimulationJobWorker:
                             len(skeleton.get("nodes", [])), len(skeleton.get("edges", [])), target_nodes)
             except Exception as exc:
                 logger.warning("LLM skeleton generation failed or did not meet minimum node count. Falling back to deterministic skeleton: %s", exc)
-                skeleton = generate_deterministic_skeleton(user_intent=user_intent, horizon_months=horizon_months)
+                skeleton = generate_deterministic_skeleton(user_intent=user_intent, horizon_months=horizon_months, target_nodes=target_nodes)
 
             # Persist skeleton nodes and edges
             self._persist_graph(session_id=session_id, graph=skeleton)

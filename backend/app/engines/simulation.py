@@ -157,13 +157,16 @@ def generate_deterministic_skeleton(
     *,
     user_intent: dict[str, Any] | Any,
     horizon_months: int = 3,
+    target_nodes: int | None = None,
 ) -> dict[str, Any]:
     """Build a simple deterministic skeleton tree as a guaranteed fallback."""
     import random as _random
 
     prompt_text = user_intent.get("original_prompt") if isinstance(user_intent, dict) else user_intent.original_prompt
 
-    if horizon_months <= 3:
+    if target_nodes is not None:
+        pass
+    elif horizon_months <= 3:
         target_nodes = 6
     elif horizon_months <= 6:
         target_nodes = 12
@@ -253,30 +256,35 @@ def generate_deterministic_skeleton(
     return {"nodes": nodes, "edges": edges}
 
 
-def merge_graphs(graph1: dict[str, Any], graph2: dict[str, Any]) -> dict[str, Any]:
+def merge_graphs(
+    graph1: dict[str, Any], 
+    graph2: dict[str, Any], 
+    namespace_prefix: str = "g2_", 
+    time_offset: int = 3
+) -> dict[str, Any]:
     """
     Merge two sequential graphs (e.g., month 0-3 and month 4-6).
-    Offsets the time_step of graph2 by +3 and connects the leaf nodes of graph1
+    Offsets the time_step of graph2 by time_offset and connects the leaf nodes of graph1
     to the root node of graph2.
     """
     import copy
-    
+
     g1_nodes = copy.deepcopy(graph1.get("nodes", []))
     g1_edges = copy.deepcopy(graph1.get("edges", []))
     g2_nodes = copy.deepcopy(graph2.get("nodes", []))
     g2_edges = copy.deepcopy(graph2.get("edges", []))
-    
+
     # 1. Offset time_step and namespace IDs in graph2
     id_mapping = {}
     for node in g2_nodes:
         old_id = node.get("id")
-        new_id = f"g2_{old_id}"
+        new_id = f"{namespace_prefix}{old_id}"
         id_mapping[old_id] = new_id
         node["id"] = new_id
-        
-        # Offset time step by +3
+
+        # Offset time step
         current_time_step = node.get("time_step", 0)
-        node["time_step"] = current_time_step + 3
+        node["time_step"] = current_time_step + time_offset
         
     for edge in g2_edges:
         if edge.get("source") in id_mapping:
