@@ -25,58 +25,14 @@ type JobResponse = {
   error_message?: string | null;
 };
 
-const POLL_INTERVAL_MS = 2000;
+
 
 export function HomePage() {
   const router = useRouter();
   const activeIntentId = useRef<string | null>(null);
-  const pollingTimer = useRef<number | null>(null);
   const [building, setBuilding] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (pollingTimer.current !== null) {
-        window.clearTimeout(pollingTimer.current);
-      }
-    };
-  }, []);
-
-  const clearTimer = () => {
-    if (pollingTimer.current !== null) {
-      window.clearTimeout(pollingTimer.current);
-      pollingTimer.current = null;
-    }
-  };
-
-  const pollJob = async (jobId: string): Promise<void> => {
-    const job = await apiJson<JobResponse>(`/v1/jobs/${jobId}`);
-
-    if (job.status === "failed") {
-      throw new Error(job.error_message || "Simulation job failed");
-    }
-
-    if (job.status !== "completed") {
-      pollingTimer.current = window.setTimeout(() => {
-        void pollJob(jobId).catch((pollError) => {
-          setError(pollError instanceof Error ? pollError.message : "Failed to poll job status.");
-          setBuilding(false);
-          clearTimer();
-        });
-      }, POLL_INTERVAL_MS);
-      return;
-    }
-
-    const sessionId = job.result?.session_id;
-    if (!sessionId) {
-      throw new Error("Simulation completed without a session id");
-    }
-
-    clearTimer();
-    setStatusMessage("Graph ready. Redirecting…");
-    router.replace(`/graph/${sessionId}`);
-  };
 
   const startSimulation = async (intent: UserIntent, options: IntentReadyOptions) => {
     if (activeIntentId.current === intent.id) {
@@ -86,7 +42,7 @@ export function HomePage() {
     activeIntentId.current = intent.id;
     setBuilding(true);
     setError(null);
-    setStatusMessage("Building graph…");
+    setStatusMessage("Starting simulation…");
 
     try {
       const response = await apiJson<StartSimulationResponse>("/v1/simulate/start", {
@@ -96,10 +52,9 @@ export function HomePage() {
           disable_scraping: options.disableScraping,
         }),
       });
-      await pollJob(response.job_id);
+      router.push(`/graph/${intent.id}?job_id=${response.job_id}`);
     } catch (startError) {
       activeIntentId.current = null;
-      clearTimer();
       setBuilding(false);
       setError(startError instanceof Error ? startError.message : "Failed to start simulation.");
       setStatusMessage(null);

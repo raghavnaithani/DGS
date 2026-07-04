@@ -4,10 +4,14 @@ type GraphPageProps = {
   params: Promise<{
     session_id: string;
   }>;
+  searchParams: Promise<{
+    job_id?: string;
+  }>;
 };
 
-export default async function Page({ params }: GraphPageProps) {
+export default async function Page({ params, searchParams }: GraphPageProps) {
   const { session_id } = await params;
+  const { job_id } = await searchParams;
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 sm:px-6 lg:px-10">
@@ -16,7 +20,7 @@ export default async function Page({ params }: GraphPageProps) {
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Decision Graph</p>
           <h1 className="text-2xl font-semibold">Session {session_id}</h1>
         </div>
-        <GraphWorkspace sessionId={session_id} />
+        <GraphWorkspace sessionId={session_id} jobId={job_id} />
       </div>
     </main>
   );
