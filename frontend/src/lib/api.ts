@@ -45,11 +45,29 @@ export function buildApiUrl(path: string): string {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** Retrieve the Supabase access token if a session exists. Returns null otherwise. */
+async function getAccessToken(): Promise<string | null> {
+  try {
+    // Dynamic import so this module stays usable in non-browser contexts too
+    const { supabase } = await import("./supabase");
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const accessToken = await getAccessToken();
+  const authHeaders: Record<string, string> = accessToken
+    ? { Authorization: `Bearer ${accessToken}` }
+    : {};
+
   const response = await fetch(buildApiUrl(path), {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders,
       ...(init?.headers ?? {}),
     },
   });
@@ -64,6 +82,7 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   return payload as T;
 }
+
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];

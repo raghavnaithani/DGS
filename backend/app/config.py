@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     supabase_url: str = ""
     supabase_key: str = ""
+    supabase_service_role_key: str = ""          # backend-only, never expose to frontend
+    supabase_jwt_secret: str = ""                # HS256 secret from Supabase Settings → API
+    # Upstash Redis (embedding cache)
+    upstash_redis_url: str = ""
+    upstash_redis_token: str = ""
+    # Stripe monetisation
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_pro_price_id: str = ""
+    # Free tier
+    free_tier_graph_limit: int = 5               # max graphs per calendar month for free users
+    export_cache_ttl_seconds: int = 86400        # 24h Playwright render cache
+    frontend_base_url: str = "http://localhost:3000"
     debug: bool = True
     # Simulation / reasoning settings
     simulation_max_retries: int = 2

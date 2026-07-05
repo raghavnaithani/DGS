@@ -97,6 +97,45 @@ SCHEMA_STATEMENTS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_graph_shares_session_id ON graph_shares(session_id)",
+    # ---------------------------------------------------------------------------
+    # v0.2 tables
+    # ---------------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS user_profiles (
+        id                      TEXT PRIMARY KEY,
+        email                   TEXT NOT NULL UNIQUE,
+        display_name            TEXT,
+        expertise_level         TEXT NOT NULL DEFAULT 'intermediate'
+                                    CHECK (expertise_level IN ('beginner', 'intermediate', 'expert')),
+        risk_tolerance          INTEGER NOT NULL DEFAULT 5
+                                    CHECK (risk_tolerance BETWEEN 1 AND 10),
+        values_json             TEXT NOT NULL DEFAULT '[]',
+        life_situation          TEXT NOT NULL DEFAULT '',
+        decision_patterns_json  TEXT NOT NULL DEFAULT '{}',
+        onboarding_complete     INTEGER NOT NULL DEFAULT 0
+                                    CHECK (onboarding_complete IN (0, 1)),
+        subscription_tier       TEXT NOT NULL DEFAULT 'free'
+                                    CHECK (subscription_tier IN ('free', 'pro')),
+        stripe_customer_id      TEXT,
+        graphs_this_month       INTEGER NOT NULL DEFAULT 0,
+        month_reset_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_email ON user_profiles(email)",
+    """
+    CREATE TABLE IF NOT EXISTS export_cache (
+        id          TEXT PRIMARY KEY,
+        session_id  TEXT NOT NULL,
+        format      TEXT NOT NULL CHECK (format IN ('pdf', 'png')),
+        file_path   TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at  TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_export_cache_session_id ON export_cache(session_id)",
     """
     CREATE TABLE IF NOT EXISTS chunks (
         id TEXT PRIMARY KEY,
@@ -162,8 +201,16 @@ def apply_schema(connection: sqlite3.Connection) -> None:
 
 
 MIGRATION_STATEMENTS = (
-    # Add watchpoints column to existing nodes tables (safe to run multiple times)
+    # Existing v0.1 migration
     "ALTER TABLE nodes ADD COLUMN watchpoints_json TEXT NOT NULL DEFAULT '[]'",
+    # ---------------------------------------------------------------------------
+    # v0.2 migrations — safe to run multiple times (errors silently ignored)
+    # ---------------------------------------------------------------------------
+    "ALTER TABLE sessions ADD COLUMN user_id TEXT",
+    "ALTER TABLE sessions ADD COLUMN domain TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sessions ADD COLUMN horizon_months INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE sessions ADD COLUMN node_count INTEGER NOT NULL DEFAULT 0",
 )
 
 
