@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import AuthenticatedUser, get_current_user
@@ -114,14 +114,14 @@ def list_sessions(
 
 @router.delete(
     "/sessions/{session_id}",
-    status_code=204,
+    status_code=200,
     summary="Soft-delete a session (removes from history, breaks share links)",
 )
 def delete_session(
     session_id: str,
     request: Request,
     user: AuthenticatedUser = Depends(get_current_user),
-) -> None:
+) -> dict:
     """
     Soft-deletes the session by setting status = 'deleted'.
     The underlying nodes and edges are NOT deleted from SQLite — they are
@@ -138,6 +138,7 @@ def delete_session(
         )
         conn.commit()
         logger.info("Soft-deleted session %s for user %s", session_id[:12], user.user_id[:8])
+    return {"status": "deleted"}
 
 
 @router.patch(

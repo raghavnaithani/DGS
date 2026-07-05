@@ -4,7 +4,7 @@ from typing import Any
 import json
 
 
-def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, parent_choice_description: str | None = None, horizon_months: int = 3) -> str:
+def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, parent_choice_description: str | None = None, horizon_months: int = 3, user_profile: dict | None = None) -> str:
     parts = [
         "Return one compact DecisionNode JSON object only.",
         "Use provided evidence for factual claims; cite supported claims as [Source: <url>].",
@@ -13,6 +13,26 @@ def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, par
         "description: Provide 3-4 concrete, numbered steps INSIDE THIS STRING. For each step, include the specific tool/platform/resource, estimated cost/time, and expected outcome.",
         "CRITICAL: Do NOT invent new JSON keys (e.g. do NOT create a 'steps' array). Output ONLY the keys defined in the schema.",
     ]
+    
+    if user_profile:
+        expertise = user_profile.get("expertise_level", "intermediate")
+        expertise_instruction = "use plain language, avoid jargon" if expertise == "beginner" else "use domain-specific terminology" if expertise == "expert" else "use balanced language"
+        risk = int(user_profile.get("risk_tolerance") or 5)
+        risk_instruction = "strongly emphasise mitigations, safety nets, conservative options" if risk <= 3 else "lead with upside, bold moves, accept calculated risk" if risk >= 8 else "balanced"
+        values_list = user_profile.get("values", [])
+        values_str = ", ".join(values_list)
+        life_situation = str(user_profile.get("life_situation") or "")[:200]
+        
+        profile_block = (
+            f"User Profile Context:\n"
+            f"- Expertise: {expertise} ({expertise_instruction})\n"
+            f"- Risk Tolerance: {risk}/10 ({risk_instruction})\n"
+        )
+        if values_str:
+            profile_block += f"- Core Values: {values_str} (branch alternatives must reflect these values, e.g. 'Financial growth' means at least one alternative per node should have a financial/ROI angle)\n"
+        if life_situation:
+            profile_block += f"- Life Situation: {life_situation} (respect constraints implied by the situation)\n"
+        parts.insert(0, profile_block)
     
     try:
         intent_dict = json.loads(user_intent_json)

@@ -338,7 +338,7 @@ class NodeGenerator:
         score = max(0.0, min(1.0, raw))
         return score
 
-    def generate_node(self, *, user_intent: UserIntent | dict[str, Any], evidence_chunks: list[dict[str, Any]], parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, max_retries: int | None = None) -> tuple[dict[str, Any], str]:
+    def generate_node(self, *, user_intent: UserIntent | dict[str, Any], evidence_chunks: list[dict[str, Any]], parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, max_retries: int | None = None, user_profile: dict | None = None) -> tuple[dict[str, Any], str]:
         max_retries = int(max_retries or settings.simulation_max_retries)
         user_intent_json = json.dumps(user_intent if isinstance(user_intent, dict) else user_intent.model_dump(), ensure_ascii=False)
         
@@ -352,7 +352,7 @@ class NodeGenerator:
                 })
         evidence_json = json.dumps(trimmed_evidence, ensure_ascii=False)
         
-        system_prompt = build_system_prompt(user_intent_json=user_intent_json, evidence_chunks_json=evidence_json, parent_summary=parent_summary, persona_prompt=persona_prompt, time_step=time_step)
+        system_prompt = build_system_prompt(user_intent_json=user_intent_json, evidence_chunks_json=evidence_json, parent_summary=parent_summary, persona_prompt=persona_prompt, time_step=time_step, user_profile=user_profile)
         user_message = "Generate one DecisionNode JSON object conforming to the schema. Make sure the output is meaningfully different from the parent branch if parent_summary is provided."
 
         last_error = None

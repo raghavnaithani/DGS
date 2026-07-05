@@ -228,6 +228,7 @@ class SimulationJobWorker:
         self,
         *,
         user_intent_id: str,
+        user_id: str | None = None,
         disable_scraping: bool = False,
         persona: str | None = None,
         webhook_url: str | None = None,
@@ -240,6 +241,7 @@ class SimulationJobWorker:
             {
                 "workflow": "start",
                 "user_intent_id": user_intent_id,
+                "user_id": user_id,
                 "disable_scraping": disable_scraping,
                 "persona": persona,
                 "webhook_url": webhook_url,
@@ -318,8 +320,36 @@ class SimulationJobWorker:
 
     def _run_start(self, job_id: str, request: dict[str, Any]) -> dict[str, Any]:
         user_intent_id = str(request["user_intent_id"])
+        user_id = request.get("user_id")
         user_intent = self._fetch_user_intent(user_intent_id)
-        session_id = self._ensure_session(user_intent_id=user_intent_id, session_id=user_intent_id, title=user_intent["original_prompt"])
+        
+        user_profile = None
+        if user_id:
+            try:
+                with get_connection(self.job_store.db_path) as connection:
+                    row = connection.execute(
+                        "SELECT expertise_level, risk_tolerance, values, life_situation FROM user_profiles WHERE id = ?",
+                        (user_id,)
+                    ).fetchone()
+                    if row:
+                        user_profile = {
+                            "expertise_level": row["expertise_level"],
+                            "risk_tolerance": row["risk_tolerance"],
+                            "values": json.loads(row["values"] or "[]"),
+                            "life_situation": row["life_situation"],
+                        }
+            except Exception as exc:
+                logger.warning("Failed to load user profile for user_id=%s: %s", user_id, exc)
+                user_profile = None
+
+        session_id = self._ensure_session(
+            user_intent_id=user_intent_id, 
+            session_id=user_intent_id, 
+            title=user_intent["original_prompt"],
+            user_id=user_id,
+            domain=user_intent.get("domain", ""),
+            horizon_months=int(user_intent.get("horizon_months") or 3)
+        )
         if (
             not bool(request.get("disable_scraping", False))
             and not settings.disable_live_scraping
@@ -491,6 +521,7 @@ class SimulationJobWorker:
                             parent_summary=parent_choice,
                             persona_prompt=persona,
                             time_step=int(node.get("time_step", 0)),
+                            user_profile=user_profile,
                         )
                         enriched_node["id"] = node["id"]  # keep skeleton id
                         if "created_at" in node:
@@ -722,14 +753,14 @@ class SimulationJobWorker:
             "created_at": row["created_at"],
         }
 
-    def _ensure_session(self, *, user_intent_id: str, session_id: str, title: str) -> str:
+    def _ensure_session(self, *, user_intent_id: str, session_id: str, title: str, user_id: str | None = None, domain: str = "", horizon_months: int = 3) -> str:
         with get_connection(self.job_store.db_path) as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO sessions (id, intent_id, title)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO sessions (id, intent_id, title, user_id, domain, horizon_months)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, user_intent_id, title[:200]),
+                (session_id, user_intent_id, title[:200], user_id, domain, horizon_months),
             )
             connection.commit()
         return session_id
@@ -946,6 +977,12 @@ class SimulationJobWorker:
                     json.dumps(node.get("watchpoints", []), ensure_ascii=False),
                     str(node.get("created_at") or ""),
                 ),
+            )
+            
+            # Update sessions table node_count
+            connection.execute(
+                "UPDATE sessions SET node_count = (SELECT COUNT(*) FROM nodes WHERE session_id = ?) WHERE id = ?",
+                (session_id, session_id),
             )
             connection.commit()
 

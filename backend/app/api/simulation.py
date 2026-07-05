@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from ..auth.middleware import AuthenticatedUser, get_optional_user
 from ..database.connection import get_connection
 from ..database.jobs_store import get_job_store
 from ..engines.simulation import generate_initial_graph
@@ -87,7 +88,7 @@ def _simulation_worker(request: Request) -> SimulationJobWorker:
 
 
 @router.post("/start")
-def start_simulation(payload: StartSimRequest, request: Request) -> JobSubmission:
+def start_simulation(payload: StartSimRequest, request: Request, user: AuthenticatedUser | None = Depends(get_optional_user)) -> JobSubmission:
     worker = _simulation_worker(request)
     try:
         _fetch_user_intent(payload.user_intent_id, db_path=str(worker.job_store.db_path))
@@ -96,6 +97,7 @@ def start_simulation(payload: StartSimRequest, request: Request) -> JobSubmissio
 
     job = worker.enqueue_start(
         user_intent_id=payload.user_intent_id,
+        user_id=user.user_id if user else None,
         disable_scraping=payload.disable_scraping,
         persona=payload.persona,
         webhook_url=str(payload.webhook_url) if payload.webhook_url else None,
