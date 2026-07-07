@@ -22,7 +22,7 @@ def _valid_node(**overrides):
         "id": "node-1",
         "title": "Approve vendor change",
         "summary": "The system recommends evaluating a vendor switch.",
-        "description": "A decision node describing a material vendor change.",
+        "description": "1. Analyze current vendors.\n2. Evaluate a material vendor change.",
         "time_step": 1,
         "created_by_engine": "arbiter",
         "alternatives": [

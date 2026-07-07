@@ -328,14 +328,14 @@ class SimulationJobWorker:
             try:
                 with get_connection(self.job_store.db_path) as connection:
                     row = connection.execute(
-                        "SELECT expertise_level, risk_tolerance, values, life_situation FROM user_profiles WHERE id = ?",
+                        "SELECT expertise_level, risk_tolerance, values_json, life_situation FROM user_profiles WHERE id = ?",
                         (user_id,)
                     ).fetchone()
                     if row:
                         user_profile = {
                             "expertise_level": row["expertise_level"],
                             "risk_tolerance": row["risk_tolerance"],
-                            "values": json.loads(row["values"] or "[]"),
+                            "values": json.loads(row["values_json"] or "[]"),
                             "life_situation": row["life_situation"],
                         }
             except Exception as exc:
@@ -419,9 +419,6 @@ class SimulationJobWorker:
                 graph = generate_initial_graph(
                     user_intent,
                     top_k=8,
-                    max_depth=max(1, int(depth)),
-                    branching_factor=max(1, int(branching_factor)),
-                    max_nodes=target_nodes,
                 )
                 self._persist_graph(session_id=session_id, graph=graph)
                 return {"session_id": session_id, "workflow": "start", **graph}

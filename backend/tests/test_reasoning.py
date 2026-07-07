@@ -35,7 +35,7 @@ def _valid_node_json(id: str = "n1") -> str:
 
 def test_generate_node_success(monkeypatch):
     gen = NodeGenerator()
-    monkeypatch.setattr(gen, "_chat_completion", lambda s, u: _valid_node_json("node-1"))
+    monkeypatch.setattr(gen, "_chat_completion", lambda *args, **kwargs: _valid_node_json("node-1"))
     node, raw = gen.generate_node(user_intent={"id": "i1", "original_prompt": "test", "domain": "general", "horizon_months": 3, "risk_tolerance": 5, "constraints": [], "personal_context": "ctx", "clarified_entities": [], "ambiguities_remaining": []}, evidence_chunks=[{"id":"c1","dense_similarity":0.8}], time_step=0)
     assert isinstance(node, dict)
     assert node["id"] == "node-1"
@@ -47,7 +47,7 @@ def test_generate_node_validation_retry(monkeypatch):
     # first return invalid JSON (no risks), then valid
     invalid = '{"id":"bad","title":"Bad","summary":"s","description":"d","time_step":0,"created_by_engine":"test","alternatives":[],"risks":[],"source_citations":[],"confidence_score":0.5,"speculative":true,"created_at":"2020-01-01T00:00:00Z"}'
     calls = {"n": 0}
-    def fake_chat(s, u):
+    def fake_chat(s, u, **kwargs):
         if calls["n"] == 0:
             calls["n"] += 1
             return invalid
@@ -92,7 +92,7 @@ def test_generate_node_marks_unsupported_claims_speculative(monkeypatch):
       "created_at": "2026-05-29T00:00:00+00:00"
     }
     """
-    monkeypatch.setattr(gen, "_chat_completion", lambda s, u: raw)
+    monkeypatch.setattr(gen, "_chat_completion", lambda *args, **kwargs: raw)
 
     node, _ = gen.generate_node(
         user_intent={"id": "i4", "original_prompt": "test4", "domain": "general", "horizon_months": 3, "risk_tolerance": 5, "constraints": [], "personal_context": "ctx", "clarified_entities": [], "ambiguities_remaining": []},
@@ -123,7 +123,7 @@ def test_generate_node_inserts_citation(monkeypatch):
   "created_at": "2026-05-29T00:00:00+00:00"
 }
 """
-    monkeypatch.setattr(gen, "_chat_completion", lambda s, u: raw)
+    monkeypatch.setattr(gen, "_chat_completion", lambda *args, **kwargs: raw)
 
     evidence = [{"id": "c1", "dense_similarity": 0.82, "content": "AI job market trends 2026 forecast", "source_url": "https://bls.gov/report"}]
     node, _ = gen.generate_node(
@@ -142,7 +142,7 @@ def test_generate_node_prompt_emphasizes_branch_distinctness(monkeypatch):
     gen = NodeGenerator()
     captured = {}
 
-    def fake_chat(system_prompt, user_message):
+    def fake_chat(system_prompt, user_message, **kwargs):
         captured["system_prompt"] = system_prompt
         captured["user_message"] = user_message
         return _valid_node_json("node-branch")

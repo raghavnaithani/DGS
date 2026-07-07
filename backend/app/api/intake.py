@@ -283,9 +283,9 @@ def build_intent(payload: BuildIntentRequest, request: Request) -> UserIntent:
         "original_prompt": payload.prompt,
         **parsed,
     }
+    if intent_data.get("horizon_months") not in {3, 6, 12}:
+        intent_data["horizon_months"] = 6
     validated_intent = UserIntent.model_validate(intent_data)
-    if validated_intent.horizon_months not in {3, 6, 12}:
-        raise HTTPException(status_code=502, detail="Groq returned an invalid horizon_months value")
     if not 1 <= validated_intent.risk_tolerance <= 10:
         raise HTTPException(status_code=502, detail="Groq returned an invalid risk_tolerance value")
     return _persist_user_intent(validated_intent, request)

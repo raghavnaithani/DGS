@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 import httpx
+import jwt
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -19,21 +20,22 @@ from backend.app.engines.simulation import merge_graphs
 DEFAULT_DB = ROOT / "backend" / "app" / "database" / "dgs_phase1.sqlite3"
 DEFAULT_OUT_DIR = ROOT / "backend" / "simulation_runs"
 DEFAULT_JOB_FILE = DEFAULT_OUT_DIR / "current_6m_chained_job.txt"
-DEFAULT_PROMPT = "wanna start selling handmade stuff online idk candles or something got maybe 500 bucks"
+DEFAULT_PROMPT = "I want to launch a high-end tech startup in the AI space and secure venture capital."
 DEFAULT_BASE = "http://127.0.0.1:8000"
 
 TERMINAL_STATUSES = {"completed", "failed"}
 
-def utc_stamp() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+def ist_stamp() -> str:
+    ist = dt.timezone(dt.timedelta(hours=5, minutes=30))
+    return dt.datetime.now(ist).strftime("%Y%m%d_%H%M%S_IST")
 
-def get_json(client: httpx.Client, url: str) -> dict[str, Any]:
-    response = client.get(url)
+def get_json(client: httpx.Client, url: str, headers: dict = None) -> dict[str, Any]:
+    response = client.get(url, headers=headers)
     response.raise_for_status()
     return response.json()
 
-def post_json(client: httpx.Client, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-    response = client.post(url, json=payload)
+def post_json(client: httpx.Client, url: str, payload: dict[str, Any], headers: dict = None) -> dict[str, Any]:
+    response = client.post(url, json=payload, headers=headers)
     response.raise_for_status()
     return response.json()
 
@@ -76,9 +78,9 @@ def read_job_from_db(db_path: Path, job_id: str) -> dict[str, Any] | None:
         data.pop(key, None)
     return data
 
-def run_simulation(client, api_base, db_path, out_dir, job_file, payload, args, phase_name) -> tuple[dict, str]:
+def run_simulation(client, api_base, db_path, out_dir, job_file, payload, args, phase_name, headers) -> tuple[dict, str]:
     print(f"\n[{phase_name}] Starting simulation job...")
-    job = post_json(client, f"{api_base}/simulate/start", payload)
+    job = post_json(client, f"{api_base}/simulate/start", payload, headers=headers)
     job_id = str(job["job_id"])
     job_file.write_text(job_id, encoding="utf-8")
     print(f"[{phase_name}] Job ID: {job_id}")
@@ -90,7 +92,7 @@ def run_simulation(client, api_base, db_path, out_dir, job_file, payload, args, 
     latest_db_job: dict[str, Any] | None = None
     while True:
         try:
-            latest_api_job = get_json(client, f"{api_base}/simulate/jobs/{job_id}")
+            latest_api_job = get_json(client, f"{api_base}/jobs/{job_id}", headers=headers)
             latest_db_job = read_job_from_db(db_path, job_id)
             status = latest_api_job.get("status")
             progress = latest_api_job.get("progress")
@@ -117,7 +119,7 @@ def run_simulation(client, api_base, db_path, out_dir, job_file, payload, args, 
     result = latest_api_job.get("result") or (latest_db_job or {}).get("result") or {}
     session_id = str(result.get("session_id") or payload.get("user_intent_id"))
     print(f"\n[{phase_name}] Fetching graph for session: {session_id}")
-    graph = get_json(client, f"{api_base}/graph/{session_id}")
+    graph = get_json(client, f"{api_base}/graph/{session_id}", headers=headers)
     return graph, session_id
 
 def run(args: argparse.Namespace) -> int:
@@ -133,11 +135,46 @@ def run(args: argparse.Namespace) -> int:
         wait_for_server(client, base, args.server_wait)
 
         # ----------------------------------------------------
+        # GENERATE MOCK JWT & PROFILE (PHASE 1)
+        # ----------------------------------------------------
+        env_path = ROOT / "backend" / ".env"
+        jwt_secret = None
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("SUPABASE_JWT_SECRET="):
+                    jwt_secret = line.split("=", 1)[1].strip()
+                    break
+        if not jwt_secret:
+            print("ERROR: SUPABASE_JWT_SECRET not found in backend/.env")
+            return 1
+            
+        print("Generating JWT for user 'test-user-123'...")
+        now = dt.datetime.now(dt.timezone.utc)
+        token_payload = {
+            "sub": "test-user-123",
+            "email": "automated_test@example.com",
+            "aud": "authenticated",
+            "iat": now,
+            "exp": now + dt.timedelta(minutes=60)
+        }
+        token = jwt.encode(token_payload, jwt_secret, algorithm="HS256")
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        print("POST /v1/profile - Creating user profile...")
+        profile_payload = {
+            "expertise_level": "expert",
+            "risk_tolerance": 9,
+            "values": ["Financial growth", "Freedom"],
+            "life_situation": "Testing Phase 1 with $50,000 budget, aggressive risk-taker, seeking fast scaling"
+        }
+        post_json(client, f"{api_base}/profile", profile_payload, headers=headers)
+        
+        # ----------------------------------------------------
         # RUN 1: MONTHS 0-3
         # ----------------------------------------------------
         print(f"\n--- PHASE 1: MONTHS 0-3 ---")
         print(f"[Phase1] Building live intent for prompt: {args.prompt!r}")
-        intent1 = post_json(client, f"{api_base}/intake/build-intent", {"prompt": args.prompt, "answers": {"q1": "make extra money", "q2": "3", "q3": "4", "q4": "$500 budget"}})
+        intent1 = post_json(client, f"{api_base}/intake/build-intent", {"prompt": args.prompt, "answers": {"q1": "make extra money", "q2": "3", "q3": "4", "q4": "$500 budget"}}, headers=headers)
         intent1_id = str(intent1["id"])
         
         sim1_payload = {
@@ -147,7 +184,7 @@ def run(args: argparse.Namespace) -> int:
             "branching_factor": args.branching_factor,
             "mode": "detailed",
         }
-        graph1, session1_id = run_simulation(client, api_base, db_path, out_dir, job_file, sim1_payload, args, "Phase1")
+        graph1, session1_id = run_simulation(client, api_base, db_path, out_dir, job_file, sim1_payload, args, "Phase1", headers)
         
         # Extract terminal node summaries
         g1_nodes = graph1.get("nodes", [])
@@ -177,7 +214,7 @@ def run(args: argparse.Namespace) -> int:
             f"For each, suggest how to adapt if it occurs. Cite evidence where possible."
         )
         print(f"[Phase2] Building live continuation intent: {continuation_prompt!r}")
-        intent2 = post_json(client, f"{api_base}/intake/build-intent", {"prompt": continuation_prompt, "answers": {"q1": "continue simulation", "q2": "3", "q3": "4", "q4": "no constraints"}})
+        intent2 = post_json(client, f"{api_base}/intake/build-intent", {"prompt": continuation_prompt, "answers": {"q1": "continue simulation", "q2": "3", "q3": "4", "q4": "no constraints"}}, headers=headers)
         intent2_id = str(intent2["id"])
         
         sim2_payload = {
@@ -187,7 +224,7 @@ def run(args: argparse.Namespace) -> int:
             "branching_factor": args.branching_factor,
             "mode": "detailed",
         }
-        graph2, session2_id = run_simulation(client, api_base, db_path, out_dir, job_file, sim2_payload, args, "Phase2")
+        graph2, session2_id = run_simulation(client, api_base, db_path, out_dir, job_file, sim2_payload, args, "Phase2", headers)
         
         # ----------------------------------------------------
         # MERGE GRAPHS
@@ -195,7 +232,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"\n--- MERGING GRAPHS ---")
         merged_graph = merge_graphs(graph1, graph2)
         
-        stamp = utc_stamp()
+        stamp = ist_stamp()
         graph_path = out_dir / f"run_output_6m_chained_graph_{stamp}.json"
         graph_path.write_text(json.dumps(merged_graph, ensure_ascii=False, indent=2), encoding="utf-8")
         

@@ -3,6 +3,7 @@ import tempfile
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
+from .fixtures.auth_fixtures import auth_headers, auth_headers_pro, create_mock_jwt
 
 @pytest.fixture(scope="session")
 def test_db_path():

@@ -27,6 +27,7 @@ raw_logs/
 context/
 
 # Outputs, Results & Auxillary
+SIMULATIONS_RUNS/
 backend/simulation_runs/
 backend/scratch/
 backend/*.db
@@ -44,3 +45,4 @@ ddg.html
 diffs.docx
 diffs.txt
 HANDOFF_v0.2.md
+artifacts/automated_3m_result.json

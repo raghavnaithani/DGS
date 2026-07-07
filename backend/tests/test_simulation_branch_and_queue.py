@@ -103,7 +103,7 @@ def _wait_for_job(job_id: str, *, expected_status: str = "completed", attempts: 
         if payload["status"] == expected_status:
             return payload
         time.sleep(delay_seconds)
-    raise AssertionError(f"Job {job_id} did not reach {expected_status}")
+    raise AssertionError(f"Job {job_id} did not reach {expected_status}. Last payload: {payload}")
 
 
 def test_branch_job_persists_child_node_and_webhook(monkeypatch, tmp_path):
@@ -133,6 +133,7 @@ def test_branch_job_persists_child_node_and_webhook(monkeypatch, tmp_path):
     monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "_refresh_evidence", lambda self, query, disable_scraping=False: None)
     monkeypatch.setattr(simulation_worker_module, "assemble_evidence", lambda query, top_k=10: SimpleNamespace(evidence=[]))
     monkeypatch.setattr(simulation_worker_module, "generate_initial_graph", lambda user_intent, top_k=10, **kwargs: _stub_initial_graph())
+    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "start", lambda self: None)
     monkeypatch.setattr(
         simulation_worker_module,
         "generate_branch_node",
@@ -199,9 +200,21 @@ def test_branch_job_persists_child_node_and_webhook(monkeypatch, tmp_path):
 
 def test_branch_job_depth_two_expands_subtree(monkeypatch, tmp_path):
     app.state.job_store = SQLiteJobStore(tmp_path / "branch-depth.sqlite3")
-    app.state.vector_store = LanceChunkStore(path=tmp_path / "branch-depth-lancedb")
+    class FakeHttpClient:
+        def __init__(self, timeout=10.0):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def get(self, url, **kwargs):
+            raise Exception("timeout")
+        def post(self, url, **kwargs):
+            raise Exception("timeout")
 
+    monkeypatch.setattr(simulation_worker_module.httpx, "Client", FakeHttpClient)
     monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "_refresh_evidence", lambda self, query, disable_scraping=False: None)
+    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "start", lambda self: None)
     monkeypatch.setattr(simulation_worker_module, "generate_initial_graph", lambda user_intent, top_k=10, **kwargs: _stub_initial_graph())
     monkeypatch.setattr(simulation_worker_module, "assemble_evidence", lambda query, top_k=10: SimpleNamespace(evidence=[]))
 
@@ -315,9 +328,22 @@ def test_start_simulation_refreshes_live_evidence_when_enabled(monkeypatch, tmp_
         async def _run_job(self, job_id, payload):
             refresh_calls.append({"job_id": job_id, "query": payload.query})
 
+    class FakeHttpClient:
+        def __init__(self, timeout=10.0):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def get(self, url, **kwargs):
+            raise Exception("timeout")
+        def post(self, url, **kwargs):
+            raise Exception("timeout")
+
+    monkeypatch.setattr(simulation_worker_module.httpx, "Client", FakeHttpClient)
     monkeypatch.setattr(simulation_worker_module, "IngestionService", FakeIngestionService)
+    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "start", lambda self: None)
     monkeypatch.setattr(simulation_worker_module, "generate_initial_graph", lambda user_intent, top_k=10, **kwargs: _stub_initial_graph())
-    monkeypatch.setattr(simulation_worker_module.settings, "simulation_enable_live_refresh", True)
     monkeypatch.setattr(simulation_worker_module, "assemble_evidence", lambda query, top_k=10: SimpleNamespace(evidence=[]))
 
     intent_payload = _seed_intent(monkeypatch)

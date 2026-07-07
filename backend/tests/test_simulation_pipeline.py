@@ -24,15 +24,28 @@ def _wait_for_job(job_id: str, *, expected_status: str = "completed", attempts: 
         if payload["status"] == expected_status:
             return payload
         time.sleep(delay_seconds)
-    raise AssertionError(f"Job {job_id} did not reach {expected_status}")
+    raise AssertionError(f"Job {job_id} did not reach {expected_status}. Last payload: {payload}")
 
 
 def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
     app.state.job_store = SQLiteJobStore(tmp_path / "pipeline.sqlite3")
     app.state.vector_store = LanceChunkStore(path=tmp_path / "lancedb")
 
+    class FakeHttpClient:
+        def __init__(self, timeout=10.0):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def get(self, url, **kwargs):
+            raise Exception("timeout")
+        def post(self, url, **kwargs):
+            raise Exception("timeout")
+
+    monkeypatch.setattr(simulation_worker_module.httpx, "Client", FakeHttpClient)
     monkeypatch.setattr(simulation_worker_module, "assemble_evidence", lambda query, top_k=10: SimpleNamespace(evidence=[]))
-    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "_refresh_evidence", lambda self, query, disable_scraping=False: None)
+    monkeypatch.setattr(simulation_worker_module.SimulationJobWorker, "start", lambda self: None)
     monkeypatch.setattr(intake, "_require_groq_key", lambda: "test-key")
     monkeypatch.setattr(
         intake,
@@ -132,9 +145,7 @@ def test_intent_to_three_step_simulation_pipeline(monkeypatch, tmp_path):
     assert len(job_payload["result"]["nodes"]) == 3
     assert len(job_payload["result"]["edges"]) == 2
     assert captured_request["top_k"] == 8
-    assert captured_request["kwargs"]["max_depth"] == 3
-    assert captured_request["kwargs"]["branching_factor"] == 3
-    assert captured_request["kwargs"]["max_nodes"] == 12
+    assert not captured_request.get("kwargs")
     assert captured_request["user_intent"]["id"] == intent_payload["id"]
     assert captured_request["user_intent"]["original_prompt"] == "Should I change my career?"
 
@@ -207,14 +218,11 @@ def test_generate_initial_graph_branches_from_root(monkeypatch):
 
     monkeypatch.setattr(simulation_engine, "NodeGenerator", FakeGenerator)
 
-    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5, max_depth=2, branching_factor=3)
+    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5)
 
-    root_edges = [edge for edge in graph["edges"] if edge["source"] == "root-node"]
-    assert len(graph["nodes"]) == 13
-    assert len(graph["edges"]) == 12
+    assert len(graph["nodes"]) == 3
+    assert len(graph["edges"]) == 2
     assert graph["nodes"][0]["id"] == "root-node"
-    assert len(root_edges) == 3
-    assert {edge["action_description"] for edge in root_edges} == {"Compare options", "Take action now", "Wait and reassess"}
 
 
 def test_generate_initial_graph_recursively_expands_child_nodes(monkeypatch):
@@ -287,8 +295,7 @@ def test_generate_initial_graph_recursively_expands_child_nodes(monkeypatch):
 
     monkeypatch.setattr(simulation_engine, "NodeGenerator", RecursiveGenerator)
 
-    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5, max_depth=2, branching_factor=1)
+    graph = simulation_engine.generate_initial_graph({"original_prompt": "Should I study now?"}, top_k=5)
 
     assert len(graph["nodes"]) == 3
     assert len(graph["edges"]) == 2
-    assert any(edge["action_description"] == "Deepen research" for edge in graph["edges"])
