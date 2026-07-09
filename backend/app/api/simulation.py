@@ -11,6 +11,7 @@ from ..database.jobs_store import get_job_store
 from ..engines.simulation import generate_initial_graph
 from ..models.jobs import JobSubmission
 from ..services.simulation_worker import SimulationJobWorker
+from ..services.usage_service import check_and_increment_graph_counter
 
 router = APIRouter()
 
@@ -94,6 +95,9 @@ def start_simulation(payload: StartSimRequest, request: Request, user: Authentic
         _fetch_user_intent(payload.user_intent_id, db_path=str(worker.job_store.db_path))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="UserIntent not found") from exc
+
+    if user:
+        check_and_increment_graph_counter(str(worker.job_store.db_path), user.user_id)
 
     job = worker.enqueue_start(
         user_intent_id=payload.user_intent_id,

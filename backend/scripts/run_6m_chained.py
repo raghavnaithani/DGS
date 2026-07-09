@@ -131,6 +131,38 @@ def run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     job_file.parent.mkdir(parents=True, exist_ok=True)
 
+    import subprocess
+    env = os.environ.copy()
+    env_path = ROOT / "backend" / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k] = v
+
+    python_exe = os.path.join(ROOT, "backend", ".venv", "Scripts", "python.exe")
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable
+
+    print("Starting backend server subprocess...")
+    backend_proc = subprocess.Popen(
+        [python_exe, "-m", "uvicorn", "app.main:app", "--port", "8000", "--host", "127.0.0.1"],
+        cwd=ROOT / "backend",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env
+    )
+    
+    import threading
+    def stream_logs(pipe, prefix):
+        for line in iter(pipe.readline, b''):
+            line = line.decode('utf-8', errors='replace').rstrip()
+            if line:
+                print(f"[{prefix}] {line}", flush=True)
+
+    threading.Thread(target=stream_logs, args=(backend_proc.stdout, "BACKEND"), daemon=True).start()
+
     with httpx.Client(timeout=httpx.Timeout(args.http_timeout)) as client:
         wait_for_server(client, base, args.server_wait)
 
@@ -162,10 +194,10 @@ def run(args: argparse.Namespace) -> int:
         
         print("POST /v1/profile - Creating user profile...")
         profile_payload = {
-            "expertise_level": "expert",
-            "risk_tolerance": 9,
-            "values": ["Financial growth", "Freedom"],
-            "life_situation": "Testing Phase 1 with $50,000 budget, aggressive risk-taker, seeking fast scaling"
+            "expertise_level": "intermediate",
+            "risk_tolerance": 5,
+            "values": ["Sustainable growth", "Work-life balance"],
+            "life_situation": "Testing Phase 1 with $15,000 budget, moderate risk-taker, looking for steady progress without burning out"
         }
         post_json(client, f"{api_base}/profile", profile_payload, headers=headers)
         
@@ -236,10 +268,50 @@ def run(args: argparse.Namespace) -> int:
         graph_path = out_dir / f"run_output_6m_chained_graph_{stamp}.json"
         graph_path.write_text(json.dumps(merged_graph, ensure_ascii=False, indent=2), encoding="utf-8")
         
+        # Phase 2 History and Graph Delete Tests
+        print("\n--- START PHASE 2 FEATURE VERIFICATION ---")
+        
+        print("Testing GET /v1/sessions ...")
+        r_hist = client.get(f"{api_base}/sessions", headers=headers)
+        if r_hist.status_code == 200:
+            sessions = r_hist.json()
+            if isinstance(sessions, dict):
+                sessions = sessions.get("sessions", [])
+            print(f"History Success: Found {len(sessions)} sessions.")
+            if not any(s.get("id") == intent2_id for s in sessions):
+                print("ERROR: Session 2 not found in history!")
+        else:
+            print(f"History Fetch Error: {r_hist.status_code} {r_hist.text}")
+            
+        print("Testing PATCH /v1/sessions/{id} ...")
+        r_patch = client.patch(f"{api_base}/sessions/{intent2_id}", json={"title": "Automated Rename 6M Mid"}, headers=headers)
+        if r_patch.status_code == 200:
+            print("Rename Success: Graph renamed to 'Automated Rename 6M Mid'")
+        else:
+            print(f"Rename Error: {r_patch.status_code} {r_patch.text}")
+        
+        print("Testing DELETE /v1/sessions/{id} ...")
+        r_del = client.delete(f"{api_base}/sessions/{intent2_id}", headers=headers)
+        if r_del.status_code == 200:
+            print("Delete Success: Session soft-deleted.")
+        else:
+            print(f"Delete Error: {r_del.status_code} {r_del.text}")
+        
+        print("Testing GET /v1/graph/{id} on soft-deleted session ...")
+        r_graph = client.get(f"{api_base}/graph/{intent2_id}", headers=headers)
+        if r_graph.status_code == 404:
+            print("Graph Load Success: 404 Not Found returned successfully for deleted graph.")
+        else:
+            print(f"Graph Load Error: Expected 404, got {r_graph.status_code}")
+            
+        print("--- END PHASE 2 FEATURE VERIFICATION ---")
+        
         print("\nCompleted Chained 6-Month Simulation")
         print(f"Graph dump: {graph_path}")
         print(f"Total Nodes: {len(merged_graph.get('nodes', []))}")
         print(f"Total Edges: {len(merged_graph.get('edges', []))}")
+        
+        backend_proc.terminate()
         return 0
 
 def parse_args() -> argparse.Namespace:

@@ -14,7 +14,7 @@ share_router = APIRouter()
 def _load_graph(db_path: str, *, session_id: str) -> dict:
     with get_connection(db_path) as connection:
         session = connection.execute(
-            "SELECT id, intent_id, title, created_at, updated_at FROM sessions WHERE id = ?",
+            "SELECT id, intent_id, title, created_at, updated_at FROM sessions WHERE id = ? AND status = 'active'",
             (session_id,),
         ).fetchone()
         if session is None:

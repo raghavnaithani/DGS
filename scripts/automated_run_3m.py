@@ -62,8 +62,12 @@ def run():
                         k, v = line.split("=", 1)
                         env[k] = v
 
+    python_exe = os.path.join(BACKEND_DIR, ".venv", "Scripts", "python.exe")
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable
+
     backend_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", "8000", "--host", "127.0.0.1"],
+        [python_exe, "-m", "uvicorn", "app.main:app", "--port", "8000", "--host", "127.0.0.1"],
         cwd=BACKEND_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -186,6 +190,43 @@ def run():
                     else:
                         log("DB Validation: Session row not found!")
                 
+                # Phase 2 History and Graph Delete Tests
+                log("--- START PHASE 2 FEATURE VERIFICATION ---")
+                
+                log("Testing GET /v1/sessions ...")
+                r_hist = httpx.get(f"{BASE_URL}/v1/sessions", headers=headers, timeout=10)
+                if r_hist.status_code == 200:
+                    sessions = r_hist.json() # Endpoint returns a list directly
+                    if isinstance(sessions, dict):
+                        sessions = sessions.get("sessions", [])
+                    log(f"History Success: Found {len(sessions)} sessions.")
+                    if not any(s.get("id") == intent_id for s in sessions):
+                        log("ERROR: Session not found in history!")
+                else:
+                    log(f"History Fetch Error: {r_hist.status_code} {r_hist.text}")
+                    
+                log("Testing PATCH /v1/sessions/{id} ...")
+                r_patch = httpx.patch(f"{BASE_URL}/v1/sessions/{intent_id}", json={"title": "Automated Rename 3M"}, headers=headers, timeout=10)
+                if r_patch.status_code == 200:
+                    log("Rename Success: Graph renamed to 'Automated Rename 3M'")
+                else:
+                    log(f"Rename Error: {r_patch.status_code} {r_patch.text}")
+                
+                log("Testing DELETE /v1/sessions/{id} ...")
+                r_del = httpx.delete(f"{BASE_URL}/v1/sessions/{intent_id}", headers=headers, timeout=10)
+                if r_del.status_code == 200:
+                    log("Delete Success: Session soft-deleted.")
+                else:
+                    log(f"Delete Error: {r_del.status_code} {r_del.text}")
+                
+                log("Testing GET /v1/graph/{id} on soft-deleted session ...")
+                r_graph = httpx.get(f"{BASE_URL}/v1/graph/{intent_id}", headers=headers, timeout=10)
+                if r_graph.status_code == 404:
+                    log("Graph Load Success: 404 Not Found returned successfully for deleted graph.")
+                else:
+                    log(f"Graph Load Error: Expected 404, got {r_graph.status_code}")
+                    
+                log("--- END PHASE 2 FEATURE VERIFICATION ---")
                 break
             elif status in ("failed", "error"):
                 log(f"Job failed! {data}")

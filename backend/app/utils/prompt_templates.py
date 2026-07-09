@@ -7,10 +7,11 @@ import json
 def build_system_prompt(*, user_intent_json: str, evidence_chunks_json: str, parent_summary: str | None = None, persona_prompt: str | None = None, time_step: int = 0, parent_choice_description: str | None = None, horizon_months: int = 3, user_profile: dict | None = None) -> str:
     parts = [
         "Return one compact DecisionNode JSON object only.",
-        "Use provided evidence for factual claims; cite supported claims as [Source: <url>].",
-        "If evidence is weak, keep claims practical/general and speculative=true.",
+        "CRITICAL EVIDENCE RULE: You MUST extract actionable insights from the provided evidence. You MUST populate the 'source_citations' array with the exact URLs of the evidence used.",
+        "For EVERY factual claim or recommended tool in your 'description' steps, you MUST cite the source inline using the format [Source: <url>].",
+        "If no evidence is provided, keep claims practical/general and set speculative=true.",
         "Strict limits: summary <= 15 words. alternatives: 1-4 (ensure organic branching: some nodes should have 1, some 2, some 3-4), description <= 15 words. risks: 1-2 max, mitigation <= 10 words.",
-        "description: Provide 3-4 concrete, numbered steps INSIDE THIS STRING. For each step, include the specific tool/platform/resource, estimated cost/time, and expected outcome.",
+        "description: Provide 3-4 concrete, numbered steps INSIDE THIS STRING. For each step, include the specific tool/platform/resource, estimated cost/time, expected outcome, and the inline [Source: <url>] citation.",
         "CRITICAL: Do NOT invent new JSON keys (e.g. do NOT create a 'steps' array). Output ONLY the keys defined in the schema.",
     ]
     

@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-import asyncio
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-from types import SimpleNamespace
-
-from fastapi.testclient import TestClient
-
-from app.api import knowledge as knowledge_api
-from app.database.jobs_store import SQLiteJobStore
-from app.database.vector_store import LanceChunkStore
-from app.engines import chunker, embedder as embedder_module, ingestion, search
-from app.main import app
 from app.models.jobs import IngestionRequest
 from app.models.knowledge import ChunkDocument, ScrapedPage
-
+from app.models.knowledge import ChunkDocument
+from app.api import knowledge as knowledge_api
+from app.engines import retriever as retriever_module
+import time
+from app.database.vector_store import LanceChunkStore
+from app.database.connection import get_connection, initialize_database
+from pathlib import Path
+from types import SimpleNamespace
+import asyncio
+from app.database.jobs_store import SQLiteJobStore
+from fastapi.testclient import TestClient
+from app.main import app
+from app.engines import chunker, embedder as embedder_module, ingestion, search
+import json
+from app.engines.retriever import HybridRetriever, RankedChunk
+from datetime import datetime, timezone
 
 client = TestClient(app)
-
 
 class FakeArray:
     def __init__(self, data):
@@ -26,7 +27,6 @@ class FakeArray:
 
     def tolist(self):
         return self._data
-
 
 def _build_ddg_html(count: int = 16) -> str:
     blocks: list[str] = []
@@ -40,7 +40,6 @@ def _build_ddg_html(count: int = 16) -> str:
             """
         )
     return "\n".join(blocks)
-
 
 def _long_markdown() -> str:
     sentence = (
@@ -58,7 +57,6 @@ def _long_markdown() -> str:
     )
     return f"# AI job market trends 2026\n\n{body}\n\n## Data snapshot\n\n{table}\n\n{body}"
 
-
 def test_search_returns_results(monkeypatch):
     html = _build_ddg_html(16)
 
@@ -71,7 +69,6 @@ def test_search_returns_results(monkeypatch):
 
     assert 16 <= len(results) <= 20
     assert all(result["title"] and result["url"] and result["snippet"] and result["domain"] for result in results)
-
 
 def test_ingestion_uses_search_max_results(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
@@ -118,7 +115,6 @@ def test_ingestion_uses_search_max_results(tmp_path, monkeypatch):
 
     assert recorded_limits == [ingestion.settings.search_max_results]
 
-
 def test_filter_reduces_list(monkeypatch):
     candidates = [
         {"title": f"Title {index}", "url": f"https://example{index}.com/page", "snippet": f"Report 2026 {index}", "domain": f"example{index}.com"}
@@ -137,7 +133,6 @@ def test_filter_reduces_list(monkeypatch):
     assert all(item["snippet"].strip() for item in filtered)
     assert all("pinterest" not in item["domain"] and "facebook" not in item["domain"] for item in filtered)
 
-
 def test_chunker_produces_correct_sizes():
     markdown = _long_markdown()
     chunks = chunker.chunk_markdown(markdown, source_url="https://example.com/article", source_title="Example Article")
@@ -148,7 +143,6 @@ def test_chunker_produces_correct_sizes():
     assert all(0 <= chunk.chunk_index for chunk in chunks)
     assert all(len(chunk.content) <= 700 for chunk in chunks)
     assert any(len(chunk.content) >= 400 for chunk in chunks)
-
 
 def test_embedder_returns_vectors_of_expected_dimensions(monkeypatch):
     class DummyModel:
@@ -167,7 +161,6 @@ def test_embedder_returns_vectors_of_expected_dimensions(monkeypatch):
     assert service.dimension() == 3
     assert len(vectors) == 2
     assert all(len(vector) == 3 for vector in vectors)
-
 
 def test_lancedb_storage_works(tmp_path):
     store = LanceChunkStore(path=tmp_path / "lancedb")
@@ -206,7 +199,6 @@ def test_lancedb_storage_works(tmp_path):
 
     assert stored == 2
     assert store.count_chunks() == 2
-
 
 def test_background_ingestion_pipeline_completes(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
@@ -258,7 +250,6 @@ def test_background_ingestion_pipeline_completes(tmp_path, monkeypatch):
     assert record.progress == 100
     assert record.stored_chunks > 0
     assert vector_store.count_chunks() == record.stored_chunks
-
 
 def test_background_ingestion_continues_when_some_scrapes_fail(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
@@ -319,7 +310,6 @@ def test_background_ingestion_continues_when_some_scrapes_fail(tmp_path, monkeyp
     assert record.result["scraped_sources"] == 1
     assert record.result["stored_chunks"] == record.stored_chunks
 
-
 def test_fail_fast_aborts_job_when_too_many_scrapes_fail(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
     vector_store = LanceChunkStore(tmp_path / "lancedb")
@@ -366,7 +356,6 @@ def test_fail_fast_aborts_job_when_too_many_scrapes_fail(tmp_path, monkeypatch):
     assert record.status == "failed"
     assert record.error_message and "Too many sources failed to scrape" in record.error_message
 
-
 def test_chunker_handles_empty_and_list_only_and_long_paragraphs():
     assert chunker.chunk_markdown("", source_url="https://example.com/empty") == []
 
@@ -384,7 +373,6 @@ def test_chunker_handles_empty_and_list_only_and_long_paragraphs():
     long_chunks = chunker.chunk_markdown(long_paragraph, source_url="https://example.com/long")
     assert long_chunks
     assert all(len(chunk.content) <= 700 for chunk in long_chunks)
-
 
 def test_duplicate_content_does_not_crash_chunking_embedding_and_storage(tmp_path, monkeypatch):
     store = LanceChunkStore(path=tmp_path / "lancedb")
@@ -413,14 +401,12 @@ def test_duplicate_content_does_not_crash_chunking_embedding_and_storage(tmp_pat
     assert stored == len(chunks_a) + len(chunks_b)
     assert store.count_chunks() == stored
 
-
 def test_chunk_defaults_ttl_and_verification_status():
     chunks = chunker.chunk_markdown(_long_markdown(), source_url="https://example.com/defaults")
 
     assert chunks
     assert all(chunk.ttl_days == 30 for chunk in chunks)
     assert all(chunk.verification_status == "unverified" for chunk in chunks)
-
 
 def test_two_ingestion_jobs_can_run_concurrently(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
@@ -471,7 +457,6 @@ def test_two_ingestion_jobs_can_run_concurrently(tmp_path, monkeypatch):
     assert record_a.stored_chunks > 0
     assert record_b.stored_chunks > 0
     assert vector_store.count_chunks() == record_a.stored_chunks + record_b.stored_chunks
-
 
 def test_ingestion_benchmark_throughput_settings_reduce_runtime(tmp_path, monkeypatch):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
@@ -538,7 +523,6 @@ def test_ingestion_benchmark_throughput_settings_reduce_runtime(tmp_path, monkey
 
     assert tuned < baseline
 
-
 def test_knowledge_ingest_endpoint_returns_job_id(monkeypatch, tmp_path):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
     app.state.job_store = job_store
@@ -558,7 +542,6 @@ def test_knowledge_ingest_endpoint_returns_job_id(monkeypatch, tmp_path):
     assert response.status_code == 202
     assert response.json() == {"job_id": "job-123", "status": "queued"}
 
-
 def test_job_status_endpoint_returns_record(tmp_path):
     job_store = SQLiteJobStore(tmp_path / "jobs.sqlite3")
     app.state.job_store = job_store
@@ -570,3 +553,218 @@ def test_job_status_endpoint_returns_record(tmp_path):
     payload = response.json()
     assert payload["id"] == job.id
     assert payload["status"] == "queued"
+
+class FakeEmbedder:
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        outputs: list[list[float]] = []
+        for text in texts:
+            lowered = text.lower()
+            if "finance" in lowered or "cashflow" in lowered:
+                outputs.append([1.0, 0.0, 0.0])
+            elif "health" in lowered or "hospital" in lowered:
+                outputs.append([0.0, 1.0, 0.0])
+            else:
+                outputs.append([0.0, 0.0, 1.0])
+        return outputs
+
+def _chunk(
+    *,
+    chunk_id: str,
+    content: str,
+    source_url: str,
+    source_title: str,
+    chunk_index: int,
+    embedding: list[float],
+    parent_id: str | None = None,
+    parent_content: str | None = None,
+    section_title: str | None = None,
+) -> ChunkDocument:
+    return ChunkDocument(
+        id=chunk_id,
+        content=content,
+        source_url=source_url,
+        source_title=source_title,
+        chunk_index=chunk_index,
+        parent_id=parent_id,
+        parent_content=parent_content,
+        section_title=section_title,
+        embedding=embedding,
+        created_at=datetime.now(timezone.utc),
+        verification_status="verified",
+    )
+
+class FakeIndexTable:
+    def __init__(self):
+        self.rows: list[dict] = []
+        self.index_calls: list[dict] = []
+
+    def add(self, rows: list[dict]) -> None:
+        self.rows.extend(rows)
+
+    def count_rows(self) -> int:
+        return len(self.rows)
+
+    def create_index(self, **kwargs) -> None:
+        self.index_calls.append(dict(kwargs))
+
+def _seed_sqlite_chunks(db_path, chunks: list[ChunkDocument]) -> None:
+    with get_connection(db_path) as connection:
+        for chunk in chunks:
+            connection.execute(
+                """
+                INSERT INTO chunks (
+                    id, session_id, content, source_url, source_title, chunk_index,
+                    embedding_json, created_at, ttl_days, verification_status, similarity_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk.id,
+                    None,
+                    chunk.content,
+                    chunk.source_url,
+                    chunk.source_title,
+                    chunk.chunk_index,
+                    json.dumps(chunk.embedding),
+                    chunk.created_at.isoformat(),
+                    chunk.ttl_days,
+                    chunk.verification_status,
+                    chunk.similarity_score,
+                ),
+            )
+        connection.commit()
+
+def _seed_retriever(tmp_path):
+    db_path = tmp_path / "retrieval.sqlite3"
+    initialize_database(db_path)
+    vector_store = LanceChunkStore(path=tmp_path / "lancedb")
+
+    chunks = [
+        _chunk(
+            chunk_id="chunk-finance",
+            content="Finance report on cashflow optimization and budget planning.",
+            source_url="https://example.com/finance",
+            source_title="Finance Report",
+            chunk_index=0,
+            embedding=[1.0, 0.0, 0.0],
+        ),
+        _chunk(
+            chunk_id="chunk-health",
+            content="Healthcare policy updates for hospitals and providers.",
+            source_url="https://example.com/health",
+            source_title="Health Policy",
+            chunk_index=1,
+            embedding=[0.0, 1.0, 0.0],
+        ),
+        _chunk(
+            chunk_id="chunk-mixed",
+            content="Budget allocation for healthcare systems and hospital finance teams.",
+            source_url="https://example.com/mixed",
+            source_title="Mixed Domain",
+            chunk_index=2,
+            embedding=[0.7, 0.3, 0.0],
+        ),
+    ]
+
+    vector_store.store_chunks(chunks)
+    _seed_sqlite_chunks(db_path, chunks)
+
+    retriever = HybridRetriever(vector_store=vector_store, embedder=FakeEmbedder(), db_path=db_path)
+    return retriever
+
+def test_retrieval_pipeline(tmp_path, monkeypatch):
+    retriever = _seed_retriever(tmp_path)
+
+    # 1. Dense and BM25 return expected chunks
+    dense = retriever.dense_search("finance cashflow budget", limit=20, min_similarity=0.7)
+    bm25 = retriever.bm25_search("finance budget", limit=20)
+    assert dense
+    assert bm25
+    assert dense[0].id == "chunk-finance"
+    assert any(item.id == "chunk-finance" for item in bm25)
+
+    # 2. Reranked output is subset of input candidates
+    dense_ranked = [
+        RankedChunk(id="chunk-finance", content="Finance report on cashflow optimization and budget planning.", source_url="https://example.com/finance", source_title="Finance Report", chunk_index=0, dense_similarity=0.95),
+        RankedChunk(id="chunk-health", content="Healthcare policy updates for hospitals and providers.", source_url="https://example.com/health", source_title="Health Policy", chunk_index=1, dense_similarity=0.9),
+    ]
+    bm25_ranked = [
+        RankedChunk(id="chunk-mixed", content="Budget allocation for healthcare systems and hospital finance teams.", source_url="https://example.com/mixed", source_title="Mixed Domain", chunk_index=2, bm25_score=0.8)
+    ]
+    class FakeReranker:
+        def rerank(self, query=None, passages=None, **kwargs):
+            return [passages[2], passages[0]]
+    monkeypatch.setattr(retriever, "dense_search", lambda *args, **kwargs: dense_ranked)
+    monkeypatch.setattr(retriever, "bm25_search", lambda *args, **kwargs: bm25_ranked)
+    monkeypatch.setattr(retriever_module, "get_flashrank_reranker", lambda: FakeReranker())
+    response = retriever.assemble_evidence("finance budget", top_k=2)
+    candidate_ids = {chunk.id for chunk in dense_ranked + bm25_ranked}
+    assert len(response.evidence) == 2
+    assert {item.id for item in response.evidence}.issubset(candidate_ids)
+    assert all(item.context_type == "evidence" for item in response.evidence)
+
+    # 3. BM25 fallback when dense returns nothing
+    monkeypatch.undo() # reset dense/bm25 mock
+    dense = retriever.dense_search("hospital policy", limit=20, min_similarity=1.01)
+    bm25 = retriever.bm25_search("hospital policy", limit=20)
+    fused = retriever.fuse_rrf(dense, bm25, k=60)
+    assert dense == []
+    assert bm25
+    assert fused
+    assert fused[0].id == "chunk-health"
+
+    # 4. BM25 strong signal skips dense search
+    def fail_dense(*args, **kwargs):
+        raise AssertionError("dense_search should not be called for a strong BM25 signal")
+    bm25_ranked_strong = [
+        RankedChunk(id="chunk-finance", content="Finance", source_url="a", source_title="a", chunk_index=0, bm25_score=0.95),
+        RankedChunk(id="chunk-mixed", content="Mixed", source_url="b", source_title="b", chunk_index=2, bm25_score=0.7),
+    ]
+    monkeypatch.setattr(retriever, "bm25_search", lambda *args, **kwargs: bm25_ranked_strong)
+    monkeypatch.setattr(retriever, "dense_search", fail_dense)
+    response = retriever.assemble_evidence("finance budget", top_k=2)
+    assert [item.id for item in response.evidence] == ["chunk-finance", "chunk-mixed"]
+    assert response.expanded_context == []
+
+    # 5. RRF fusion combines rankings and preserves scores
+    dense_rrf = [
+        RankedChunk(id="a", content="A", source_url="a", source_title="A", chunk_index=0, dense_similarity=0.91),
+        RankedChunk(id="b", content="B", source_url="b", source_title="B", chunk_index=1, dense_similarity=0.87),
+    ]
+    bm25_rrf = [
+        RankedChunk(id="b", content="B", source_url="b", source_title="B", chunk_index=1, bm25_score=-4.2),
+        RankedChunk(id="c", content="C", source_url="c", source_title="C", chunk_index=2, bm25_score=-3.5),
+    ]
+    fused = retriever.fuse_rrf(dense_rrf, bm25_rrf, k=60)
+    assert [item.id for item in fused] == ["b", "a", "c"]
+    assert fused[0].dense_similarity == 0.87
+    assert fused[0].bm25_score == -4.2
+
+    # 6. ANN index is created after threshold crossed
+    store = LanceChunkStore(path=tmp_path / "lancedb2")
+    fake_table = FakeIndexTable()
+    store._open_or_create_table = lambda: fake_table
+    chunks = [
+        _chunk(chunk_id=f"chunk-{index}", content=f"Chunk {index} content.", source_url=f"https://example.com/{index}", source_title=f"Chunk {index}", chunk_index=index, embedding=[0.1, 0.2, 0.3])
+        for index in range(256)
+    ]
+    stored = store.store_chunks(chunks)
+    assert stored == 256
+    assert fake_table.index_calls
+    assert fake_table.index_calls[0]["metric"] == "cosine"
+
+    # 7. Parent context is returned separately
+    job_store_path = tmp_path / "retrieval3.sqlite3"
+    initialize_database(job_store_path)
+    store3 = LanceChunkStore(path=tmp_path / "lancedb3")
+    parent = _chunk(chunk_id="chunk-parent", content="Parent section.", source_url="a", source_title="A", chunk_index=0, embedding=[1.0, 0.0, 0.0])
+    child = _chunk(chunk_id="chunk-child", content="Child chunk.", source_url="b", source_title="B", chunk_index=1, embedding=[0.9, 0.1, 0.0], parent_id="chunk-parent", parent_content="Parent section.", section_title="Finance Detail")
+    store3.store_chunks([parent, child])
+    retriever3 = HybridRetriever(vector_store=store3, embedder=FakeEmbedder(), db_path=job_store_path)
+    monkeypatch.setattr(retriever3, "bm25_search", lambda *args, **kwargs: [])
+    monkeypatch.setattr(retriever3, "dense_search", lambda *args, **kwargs: [retriever3._row_to_ranked_chunk(child.model_dump(mode="json"), dense_similarity=0.97)])
+    response = retriever3.assemble_evidence("finance detail", top_k=1)
+    assert len(response.evidence) == 1
+    assert response.evidence[0].id == "chunk-child"
+    assert len(response.expanded_context) == 1
+    assert response.expanded_context[0].id == "chunk-parent"
+    assert response.expanded_context[0].context_type == "parent"

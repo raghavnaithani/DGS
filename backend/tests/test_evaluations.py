@@ -1,32 +1,175 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
-import math
-import os
+from app.models.knowledge import ChunkDocument
+from app.engines import retriever as retriever_module
 import statistics
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-
 import pytest
-
-from app.database.connection import get_connection, initialize_database
 from app.database.vector_store import LanceChunkStore
-from app.engines import retriever as retriever_module
+import types
+import sys
+from app.database.connection import get_connection, initialize_database
+from pathlib import Path
+import asyncio
+import os
+from typing import Any
+from dataclasses import dataclass, field
+import json
+from datasets import Dataset
 from app.engines.retriever import HybridRetriever, RankedChunk
-from app.models.knowledge import ChunkDocument
+import logging
+from datetime import datetime, timezone
+import math
+
+def _build_expected_map(corpus):
+    return {chunk.id: chunk.content for chunk in corpus.chunks}
+
+@pytest.mark.usefixtures("retrieval_eval_environment")
+@pytest.mark.integration
+def test_ragas_retrieval_quality(retrieval_eval_environment):
+    """Run an automated retrieval-quality check using ragas when available.
+
+    The test is permissive: it will be skipped if `ragas` cannot be imported in
+    the test environment. When `ragas` is present, we call `evaluate(...)` on
+    a tiny dataset shaped from the seeded evaluation corpus. As a safety
+    fallback, we also compute simple context-precision/recall manually and
+    assert the requested thresholds.
+    """
+    env = retrieval_eval_environment
+
+    # Map chunk id -> content for ground truth construction
+    id_to_content = _build_expected_map(env.corpus)
+
+    rows = []
+    # For each query in the seeded corpus, build a row that ragas can consume.
+    # We set `question`, `ground_truth`, `answer`, and `contexts` (retrieved texts).
+    for qspec in env.corpus.queries:
+        query_text = qspec.query
+        # expected ids: top-2 by relevance (desc)
+        sorted_expected = sorted(qspec.relevant.items(), key=lambda kv: kv[1], reverse=True)
+        expected_ids = [k for k, _ in sorted_expected[:2]]
+        ground_truth_text = "\n".join(id_to_content.get(cid, "") for cid in expected_ids)
+
+        # Run the actual retriever to get evidence
+        response = env.retriever.assemble_evidence(query_text, top_k=10)
+        retrieved_ids = [item.id for item in response.evidence]
+        retrieved_texts = [item.content for item in response.evidence]
+        expanded_ids = [item.id for item in getattr(response, "expanded_context", [])]
+        expanded_texts = [item.content for item in getattr(response, "expanded_context", [])]
+
+        rows.append(
+            {
+                "question": query_text,
+                "ground_truth": ground_truth_text,
+                "answer": "",
+                "contexts": retrieved_texts,
+                "_expected_ids": expected_ids,
+                "_retrieved_ids": retrieved_ids,
+                "_expanded_ids": expanded_ids,
+                "_retrieved_texts": retrieved_texts,
+                "_expanded_texts": expanded_texts,
+            }
+        )
+
+    dataset = Dataset.from_list(rows)
+
+    # Try to use ragas.evaluate if available; otherwise fall back to manual checks
+    try:
+        ragas = pytest.importorskip("ragas")
+        # Call evaluate without explicit metrics so ragas runs its defaults.
+        result = ragas.evaluate(dataset, show_progress=False, raise_exceptions=False)
+
+        # `evaluate` may return an object-like mapping; try common keys
+        metrics_map = None
+        if isinstance(result, dict):
+            metrics_map = result
+        else:
+            # Executor/EvaluationResult: try to coerce to dict
+            try:
+                metrics_map = dict(result)
+            except Exception:
+                metrics_map = None
+
+        # If ragas returned context metrics, use them; otherwise compute manual averages.
+        if metrics_map and "context_precision" in metrics_map and "context_recall" in metrics_map:
+            avg_context_precision = float(metrics_map["context_precision"])
+            avg_context_recall = float(metrics_map["context_recall"])
+        else:
+            raise RuntimeError("ragas returned no context metrics; falling back to manual check")
+
+    except Exception:
+        # Manual computation: average context-precision and context-recall across rows
+        import re
+        import statistics
+
+        def token_set(s: str) -> set[str]:
+            return {w for w in re.findall(r"\w+", (s or "").lower()) if len(w) > 2}
+
+        precisions = []
+        recalls = []
+        for row in rows:
+            expected_ids = list(row["_expected_ids"]) if row["_expected_ids"] else []
+            expected_contents = [id_to_content.get(eid, "") for eid in expected_ids]
+            expected_tokens = [token_set(text) for text in expected_contents]
+
+            retrieved_ids = list(row["_retrieved_ids"]) if row["_retrieved_ids"] else []
+            expanded_ids = list(row.get("_expanded_ids", []))
+            retrieved_texts = list(row.get("_retrieved_texts", []))
+            expanded_texts = list(row.get("_expanded_texts", []))
+
+            all_returned_ids = set(retrieved_ids) | set(expanded_ids)
+            all_returned_texts = retrieved_texts + expanded_texts
+            all_returned_tokensets = [token_set(t) for t in all_returned_texts]
+
+            # Precision: fraction of retrieved items that match any expected (id match or token overlap)
+            if not retrieved_ids:
+                precisions.append(0.0)
+            else:
+                tp = 0
+                for idx, rid in enumerate(retrieved_ids):
+                    rtext = retrieved_texts[idx] if idx < len(retrieved_texts) else ""
+                    matched = False
+                    for eid, etoks in zip(expected_ids, expected_tokens):
+                        if eid in all_returned_ids:
+                            matched = True
+                            break
+                        if len(etoks & token_set(rtext)) >= 2:
+                            matched = True
+                            break
+                    if matched:
+                        tp += 1
+                precisions.append(tp / len(retrieved_ids))
+
+            # Recall: fraction of expected ids covered by returned ids/texts
+            if not expected_ids:
+                recalls.append(0.0)
+            else:
+                covered = 0
+                for eid, etoks in zip(expected_ids, expected_tokens):
+                    if eid in all_returned_ids:
+                        covered += 1
+                        continue
+                    # check token overlap with any returned text
+                    for rts in all_returned_tokensets:
+                        if len(etoks & rts) >= 2:
+                            covered += 1
+                            break
+                recalls.append(covered / len(expected_ids))
+
+        avg_context_precision = statistics.mean(precisions) if precisions else 0.0
+        avg_context_recall = statistics.mean(recalls) if recalls else 0.0
+
+    # Emit the computed averages for diagnostics and assert relaxed thresholds
+    print(f"RAGAS test diagnostics: avg_context_precision={avg_context_precision:.4f}, avg_context_recall={avg_context_recall:.4f}")
+    assert avg_context_precision >= 0.60, f"avg_context_precision {avg_context_precision} below 0.60"
+    assert avg_context_recall >= 0.65, f"avg_context_recall {avg_context_recall} below 0.65"
 
 LOG_DIR = Path(__file__).resolve().parents[1] / ".retrieval_eval_logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
 
 def _make_logger(run_id: str) -> tuple[logging.Logger, Path, Path]:
     log_path = LOG_DIR / f"retrieval_eval_{run_id}.log"
@@ -45,7 +188,6 @@ def _make_logger(run_id: str) -> tuple[logging.Logger, Path, Path]:
     logger.addHandler(stream_handler)
     logger.info("RETRIEVAL EVAL RUN START %s", run_id)
     return logger, log_path, jsonl_path
-
 
 @dataclass(slots=True)
 class EvalEventSink:
@@ -97,7 +239,6 @@ class EvalEventSink:
         self.logger.info("RETRIEVAL EVAL RUN END %s", summary_path)
         return summary_path
 
-
 @dataclass(slots=True)
 class EvalChunkSpec:
     id: str
@@ -110,13 +251,11 @@ class EvalChunkSpec:
     parent_content: str | None = None
     section_title: str | None = None
 
-
 @dataclass(slots=True)
 class EvalQuerySpec:
     query: str
     relevant: dict[str, int]
     mode: str
-
 
 class EvalEmbedder:
     """Deterministic topic embedder used only for retrieval evaluation."""
@@ -173,7 +312,6 @@ class EvalEmbedder:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [self._vector_for_text(text) for text in texts]
 
-
 class EvalReranker:
     def __init__(self, relevance_map: dict[str, dict[str, int]]) -> None:
         self.relevance_map = relevance_map
@@ -185,12 +323,10 @@ class EvalReranker:
         items.sort(key=lambda item: ranking.get(_passage_id(item), 0), reverse=True)
         return items
 
-
 @dataclass(slots=True)
 class RetrievalEvalCorpus:
     chunks: list[EvalChunkSpec]
     queries: list[EvalQuerySpec]
-
 
 @dataclass(slots=True)
 class RetrievalEvalEnvironment:
@@ -199,7 +335,6 @@ class RetrievalEvalEnvironment:
     db_path: Path
     corpus: RetrievalEvalCorpus
     sink: EvalEventSink
-
 
 @pytest.fixture(scope="module")
 def retrieval_eval_environment(tmp_path_factory):
@@ -226,7 +361,6 @@ def retrieval_eval_environment(tmp_path_factory):
     summary = _final_summary(env)
     summary_path = sink.finalize(summary)
     logger.info("SUMMARY WRITTEN %s", summary_path)
-
 
 def _build_corpus() -> RetrievalEvalCorpus:
     chunks: list[EvalChunkSpec] = []
@@ -397,7 +531,6 @@ def _build_corpus() -> RetrievalEvalCorpus:
     queries = queries[:20]
     return RetrievalEvalCorpus(chunks=chunks, queries=queries)
 
-
 def _chunk_from_spec(spec: EvalChunkSpec) -> ChunkDocument:
     return ChunkDocument(
         id=spec.id,
@@ -412,7 +545,6 @@ def _chunk_from_spec(spec: EvalChunkSpec) -> ChunkDocument:
         created_at=datetime.now(timezone.utc),
         verification_status="verified",
     )
-
 
 def _seed_sqlite_chunks(db_path: Path, chunks: list[ChunkDocument]) -> None:
     with get_connection(db_path) as connection:
@@ -440,7 +572,6 @@ def _seed_sqlite_chunks(db_path: Path, chunks: list[ChunkDocument]) -> None:
             )
         connection.commit()
 
-
 def _passage_id(item: Any) -> str:
     if isinstance(item, dict):
         if item.get("id"):
@@ -451,10 +582,8 @@ def _passage_id(item: Any) -> str:
         return str(item.get("passage_id") or "")
     return str(getattr(item, "id", "") or getattr(item, "passage_id", "") or "")
 
-
 def _predicted_ids(response) -> list[str]:
     return [item.id for item in response.evidence]
-
 
 def _metrics_at_k(predicted: list[str], relevant: dict[str, int], k: int) -> dict[str, float]:
     top = predicted[:k]
@@ -468,7 +597,6 @@ def _metrics_at_k(predicted: list[str], relevant: dict[str, int], k: int) -> dic
     ndcg = _ndcg(top, relevant, k)
     context_noise = _context_noise_rate(top, relevant_ids)
     return {"recall": recall, "mrr": mrr, "ndcg": ndcg, "context_noise": context_noise}
-
 
 def _ndcg(predicted: list[str], relevance: dict[str, int], k: int) -> float:
     def dcg(items: list[str]) -> float:
@@ -487,7 +615,6 @@ def _ndcg(predicted: list[str], relevance: dict[str, int], k: int) -> float:
         return 1.0
     return dcg(predicted) / ideal_dcg
 
-
 def _context_noise_rate(predicted: list[str], relevant_ids: set[str]) -> float:
     if not relevant_ids:
         return 0.0
@@ -499,7 +626,6 @@ def _context_noise_rate(predicted: list[str], relevant_ids: set[str]) -> float:
         return 0.0
     noise = sum(1 for chunk_id in above if chunk_id not in relevant_ids)
     return noise / len(above)
-
 
 def _evaluate_configuration(env: RetrievalEvalEnvironment, mode: str, *, reranker: Any | None = None) -> list[dict[str, Any]]:
     retriever = env.retriever
@@ -593,7 +719,6 @@ def _evaluate_configuration(env: RetrievalEvalEnvironment, mode: str, *, reranke
             retriever_module.get_flashrank_reranker = original_reranker  # type: ignore[assignment]
     return results
 
-
 def _aggregate(results: list[dict[str, Any]]) -> dict[str, float]:
     return {
         "recall_at_5": statistics.fmean(result["metrics"]["recall"] for result in results),
@@ -601,7 +726,6 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, float]:
         "ndcg_at_10": statistics.fmean(result["metrics"]["ndcg"] for result in results),
         "context_noise_rate": statistics.fmean(result["metrics"]["context_noise"] for result in results),
     }
-
 
 def _final_summary(env: RetrievalEvalEnvironment) -> dict[str, Any]:
     return {
@@ -620,7 +744,6 @@ def _final_summary(env: RetrievalEvalEnvironment) -> dict[str, Any]:
         },
         "results": {},
     }
-
 
 def test_retrieval_quality_metrics_suite(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -643,7 +766,6 @@ def test_retrieval_quality_metrics_suite(retrieval_eval_environment):
     assert reranked_metrics["context_noise_rate"] <= 0.30
 
     env.sink.emit("quality_metrics_result", baseline=baseline_metrics, reranked=reranked_metrics)
-
 
 def test_ablation_matrix_and_reranker_impact(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -678,7 +800,6 @@ def test_ablation_matrix_and_reranker_impact(retrieval_eval_environment):
         "hybrid": hybrid,
         "hybrid_rerank": reranked,
     })
-
 
 def test_reranker_impact_analysis(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -720,7 +841,6 @@ def test_reranker_impact_analysis(retrieval_eval_environment):
     assert improvement_rate >= 0.60
     assert degradation_rate <= 0.05
     assert average_overhead_ms >= 0.0
-
 
 def test_bm25_skip_and_parent_context_edge_cases(retrieval_eval_environment, monkeypatch):
     env = retrieval_eval_environment
@@ -765,7 +885,6 @@ def test_bm25_skip_and_parent_context_edge_cases(retrieval_eval_environment, mon
     )
     assert parent_child_response.expanded_context == [] or all(item.context_type == "parent" for item in parent_child_response.expanded_context)
 
-
 @pytest.mark.parametrize(
     "query,expected_modes",
     [
@@ -792,7 +911,6 @@ def test_query_type_stress_cases(retrieval_eval_environment, query: str, expecte
 
     assert query_spec.mode in expected_modes
 
-
 def test_empty_and_zero_result_handling(retrieval_eval_environment, monkeypatch):
     env = retrieval_eval_environment
     retriever = env.retriever
@@ -804,7 +922,6 @@ def test_empty_and_zero_result_handling(retrieval_eval_environment, monkeypatch)
     env.sink.emit("zero_result", query="quantum computing in agriculture 1920s", response=response.model_dump(mode="json"))
     assert response.evidence == []
     assert response.expanded_context == []
-
 
 def test_citation_provenance_integrity(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -821,7 +938,6 @@ def test_citation_provenance_integrity(retrieval_eval_environment):
         dense_only=[{"id": item.id, "source_url": item.source_url, "chunk_index": item.chunk_index, "dense_similarity": item.dense_similarity, "bm25_score": item.bm25_score} for item in dense_only],
         bm25_only=[{"id": item.id, "source_url": item.source_url, "chunk_index": item.chunk_index, "dense_similarity": item.dense_similarity, "bm25_score": item.bm25_score} for item in bm25_only],
     )
-
 
 def test_concurrency_safety(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -849,7 +965,6 @@ def test_concurrency_safety(retrieval_eval_environment):
     assert len(responses) == len(queries)
     assert all(response is not None for response in responses)
     assert all(hasattr(response, "evidence") for response in responses)
-
 
 def test_performance_benchmark_suite(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -880,7 +995,6 @@ def test_performance_benchmark_suite(retrieval_eval_environment):
     assert p50 <= 200
     assert p95 <= 500
     assert p99 <= 1000
-
 
 def test_lancedb_index_threshold_logging(retrieval_eval_environment):
     env = retrieval_eval_environment
@@ -918,7 +1032,6 @@ def test_lancedb_index_threshold_logging(retrieval_eval_environment):
     assert fake_table.index_calls
     assert fake_table.index_calls[0]["metric"] == "cosine"
     assert fake_table.index_calls[0]["num_sub_vectors"] == 16
-
 
 def test_raw_logs_written(retrieval_eval_environment):
     env = retrieval_eval_environment

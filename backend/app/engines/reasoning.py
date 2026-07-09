@@ -276,6 +276,9 @@ class NodeGenerator:
             sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", text) if segment.strip()]
             rewritten: list[str] = []
             for sentence in sentences:
+                if len(sentence) < 5:
+                    rewritten.append(sentence)
+                    continue
                 support_score = self._evidence_support_score(sentence, evidence_chunks)
                 requires_source = bool(re.search(r"\d{1,4}|\b[A-Z][a-z]{2,}\b", sentence)) or support_score < 0.4
                 if "[Source:" not in sentence:

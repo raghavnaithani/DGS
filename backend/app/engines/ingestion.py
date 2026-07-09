@@ -57,11 +57,30 @@ class IngestionService:
 
             if payload.query:
                 self.job_store.update_job(job_id, current_step="searching sources", progress=10)
-                market_aware_query = f"{payload.query} step by step guide practical tips for beginners"
-                candidates = await search_web(market_aware_query, limit=settings.search_max_results)
-                filtered_sources = filter_candidates(candidates)
-                if not filtered_sources and candidates:
-                    filtered_sources = candidates[:10]
+                
+                # Use targeted search queries to get actionable evidence
+                queries = [
+                    f"{payload.query} actionable steps guide",
+                    f"{payload.query} tools OR software site:reddit.com",
+                    f"{payload.query} real world examples case study"
+                ]
+                
+                candidates = []
+                for q in queries:
+                    q_cands = await search_web(q, limit=settings.search_max_results)
+                    candidates.extend(q_cands)
+                    
+                # De-duplicate by URL
+                seen_urls = set()
+                unique_candidates = []
+                for c in candidates:
+                    if c["url"] not in seen_urls:
+                        unique_candidates.append(c)
+                        seen_urls.add(c["url"])
+                
+                filtered_sources = filter_candidates(unique_candidates)
+                if not filtered_sources and unique_candidates:
+                    filtered_sources = unique_candidates[:15]
             else:
                 filtered_sources = [_source_from_url(str(url)) for url in payload.urls]
 

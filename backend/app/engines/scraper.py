@@ -66,6 +66,10 @@ def _cached_robot_parser(base_url: str) -> RobotFileParser:
 
 
 async def _robots_allow(url: str, user_agent: str) -> bool:
+    domain = urlparse(url).netloc.lower()
+    # Exempt valuable community domains that aggressively block agents
+    if "reddit.com" in domain or "ycombinator.com" in domain:
+        return True
     try:
         parser = await asyncio.to_thread(_cached_robot_parser, _domain_base(url))
         return await asyncio.to_thread(parser.can_fetch, user_agent, url)

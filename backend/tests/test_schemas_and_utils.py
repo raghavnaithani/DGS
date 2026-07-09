@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
+from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.models import Alternative, DecisionNode, KnowledgeChunk, Risk, UserIntent
-
+from datetime import datetime, timezone
+from pydantic import ValidationError
 
 def _valid_risk(severity: str = "Medium") -> Risk:
     return Risk(
@@ -15,7 +14,6 @@ def _valid_risk(severity: str = "Medium") -> Risk:
         mitigation_strategy="Add buffer time",
         citation="https://example.com/risk",
     )
-
 
 def _valid_node(**overrides):
     base = {
@@ -42,27 +40,24 @@ def _valid_node(**overrides):
     base.update(overrides)
     return DecisionNode(**base)
 
-
-def test_valid_decision_node_passes_validation():
+def test_pydantic_schemas():
+    # Valid decision node passes validation
     node = _valid_node()
-
     assert node.id == "node-1"
     assert node.confidence_score == 0.75
     assert node.risks[0].severity == "High"
 
-
-def test_empty_risks_list_is_rejected():
+    # Empty risks list is rejected
     with pytest.raises(ValidationError):
         _valid_node(risks=[])
 
-
-@pytest.mark.parametrize("score", [-0.1, 1.1])
-def test_confidence_score_outside_bounds_is_rejected(score):
+    # Confidence score outside bounds is rejected
     with pytest.raises(ValidationError):
-        _valid_node(confidence_score=score)
+        _valid_node(confidence_score=-0.1)
+    with pytest.raises(ValidationError):
+        _valid_node(confidence_score=1.1)
 
-
-def test_material_action_without_high_risk_is_rejected():
+    # Material action without high risk is rejected
     with pytest.raises(ValidationError):
         _valid_node(
             alternatives=[
@@ -75,8 +70,7 @@ def test_material_action_without_high_risk_is_rejected():
             risks=[_valid_risk("Medium")],
         )
 
-
-def test_knowledge_chunk_defaults_and_validation():
+    # Knowledge chunk defaults and validation
     chunk = KnowledgeChunk(
         id="chunk-1",
         content="Important context from a source document.",
@@ -87,12 +81,10 @@ def test_knowledge_chunk_defaults_and_validation():
         created_at=datetime(2026, 5, 24, tzinfo=timezone.utc),
         verification_status="unverified",
     )
-
     assert chunk.ttl_days == 30
     assert chunk.embedding == [0.1, 0.2, 0.3]
 
-
-def test_user_intent_validation():
+    # User intent validation
     intent = UserIntent(
         id="intent-1",
         original_prompt="Plan a product launch",
@@ -104,5 +96,4 @@ def test_user_intent_validation():
         clarified_entities=["launch plan"],
         ambiguities_remaining=["market timing"],
     )
-
     assert intent.risk_tolerance == 40
