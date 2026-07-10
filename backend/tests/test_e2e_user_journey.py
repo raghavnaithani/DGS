@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import json
 import uuid
-from app.tests.fixtures.auth_fixtures import auth_headers
+
 from app.database.jobs_store import SQLiteJobStore
 from fastapi.testclient import TestClient
 import sqlite3
@@ -212,9 +212,7 @@ def test_e2e_sessions_lifecycle(client, auth_headers, test_db_path):
     res = client.get(f"/v1/graph/{session_id}", headers=auth_headers)
     assert res.status_code == 404
 
-client = TestClient(app)
-
-def test_intake_pipeline(monkeypatch, tmp_path):
+def test_intake_pipeline(client, monkeypatch, tmp_path):
     # 1. Clarify returns valid questions
     monkeypatch.setattr(intake, "_require_groq_key", lambda: "test-key")
     monkeypatch.setattr(

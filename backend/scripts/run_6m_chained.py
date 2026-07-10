@@ -194,10 +194,10 @@ def run(args: argparse.Namespace) -> int:
         
         print("POST /v1/profile - Creating user profile...")
         profile_payload = {
-            "expertise_level": "intermediate",
-            "risk_tolerance": 5,
-            "values": ["Sustainable growth", "Work-life balance"],
-            "life_situation": "Testing Phase 1 with $15,000 budget, moderate risk-taker, looking for steady progress without burning out"
+            "expertise_level": "expert",
+            "risk_tolerance": 9,
+            "values": ["High Growth", "Market Dominance", "Speed to Market"],
+            "life_situation": "Well-funded serial entrepreneur with a $150,000 budget, high risk tolerance, looking for aggressive expansion and rapid scaling."
         }
         post_json(client, f"{api_base}/profile", profile_payload, headers=headers)
         

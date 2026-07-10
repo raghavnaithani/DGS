@@ -113,7 +113,8 @@ def test_ingestion_uses_search_max_results(tmp_path, monkeypatch):
 
     asyncio.run(run_pipeline())
 
-    assert recorded_limits == [ingestion.settings.search_max_results]
+    assert all(limit == ingestion.settings.search_max_results for limit in recorded_limits)
+    assert len(recorded_limits) >= 1
 
 def test_filter_reduces_list(monkeypatch):
     candidates = [

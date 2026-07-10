@@ -12,7 +12,8 @@ def create_mock_jwt(user_id: str, email: str, expires_in_minutes: int = 60) -> s
         "iat": now,
         "exp": now + timedelta(minutes=expires_in_minutes)
     }
-    return jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
+    secret = settings.supabase_jwt_secret or "test_secret_key"
+    return jwt.encode(payload, secret, algorithm="HS256")
 
 @pytest.fixture
 def auth_headers():
